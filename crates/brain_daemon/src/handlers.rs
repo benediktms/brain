@@ -16,6 +16,8 @@
 use std::sync::{Arc, OnceLock};
 
 use brain_lib::stores::BrainStores;
+use brain_lib::search_service::SearchService;
+use brain_lib::prelude::Embed;
 use brain_persistence::db::sagas::compact_saga_id;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
@@ -61,13 +63,12 @@ pub struct BrainStoresDispatcher {
     /// LanceDB + embedder). Created lazily on first use to keep daemon
     /// startup fast for callers that never touch semantic memory.
     runtime: OnceLock<tokio::runtime::Runtime>,
-    /// Bootstrapped semantic-memory resource holder (BrainStores +
-    /// SearchService + Metrics). Memory handlers borrow this into a
-    /// `brain_memory::context::SemanticContext` for each call. Built
-    /// lazily so a daemon launched without the embedder model on disk
-    /// still answers everything else. Keeps its historical
-    /// `McpContext` name until brain_lib::mcp leaves in PR2.
-    mcp_ctx: OnceLock<Arc<brain_lib::mcp::McpContext>>,
+    /// Lazily-initialised search layer (LanceDB + embedder). `None` when
+    /// the embedder model is not on disk — memory/search tools are unavailable
+    /// but all other tools keep working.
+    search_layer: OnceLock<SearchService>,
+    /// Daemon process metrics. Shared across all request handlers.
+    metrics: OnceLock<Arc<brain_lib::metrics::Metrics>>,
     /// Handle to the file-watcher supervisor. `None` when the daemon was
     /// started without a supervisor (e.g. no `--watch-dir` flag). Used
     /// by the `WatchAdd` / `WatchRemove` / `WatchList` request handlers
@@ -84,7 +85,8 @@ impl BrainStoresDispatcher {
         Self {
             stores,
             runtime: OnceLock::new(),
-            mcp_ctx: OnceLock::new(),
+            search_layer: OnceLock::new(),
+            metrics: OnceLock::new(),
             #[cfg(feature = "embed")]
             watcher,
         }
@@ -111,38 +113,72 @@ impl BrainStoresDispatcher {
             .expect("runtime initialised above (or by racing writer)"))
     }
 
-    /// Lazily build (or return) the shared `McpContext` for semantic
-    /// memory tools. Returns `RpcError::Unknown` if the embedder /
-    /// LanceDB cannot be loaded — callers (retrieve / reflect) surface
-    /// the error verbatim to the wire.
-    fn mcp_ctx(&self) -> Result<Arc<brain_lib::mcp::McpContext>, RpcError> {
-        if let Some(ctx) = self.mcp_ctx.get() {
-            return Ok(Arc::clone(ctx));
+    /// Lazily build (or return) the search service (LanceDB + embedder).
+    /// Returns `RpcError::Unknown` if the embedder / LanceDB cannot be
+    /// loaded — callers surface the error verbatim to the wire.
+    fn search_layer(&self) -> Result<&SearchService, RpcError> {
+        if let Some(s) = self.search_layer.get() {
+            return Ok(s);
         }
-        let brain_home = self.stores.brain_home.clone();
+        let brain_home = &self.stores.brain_home;
         let model_dir = brain_home.join("models").join("bge-small-en-v1.5");
         let lance_db = brain_home.join("lancedb");
-        let sqlite_db = brain_home.join("brain.db");
-        let ctx = self
+
+        let search = self
             .runtime()?
-            .block_on(async {
-                brain_lib::mcp::McpContext::bootstrap(
-                    &model_dir,
-                    &lance_db,
-                    &sqlite_db,
-                    Some(self.stores.brain_name.as_str()),
-                )
-                .await
-            })
+            .block_on(self.try_load_search(&model_dir, &lance_db))
             .map_err(|e| RpcError::Unknown {
-                message: format!("bootstrap McpContext for memory tools: {e}"),
+                message: format!("bootstrap search layer: {e}"),
             })?;
-        let _ = self.mcp_ctx.set(Arc::clone(&ctx));
+        let _ = self.search_layer.set(search);
         Ok(self
-            .mcp_ctx
+            .search_layer
             .get()
-            .map(Arc::clone)
-            .expect("mcp_ctx initialised above (or by racing writer)"))
+            .expect("search_layer initialised above (or by racing writer)"))
+    }
+
+    /// Async search layer bootstrap — extracted from `search_layer()` so
+    /// it can be called within `block_on`.
+    #[cfg(feature = "embed")]
+    async fn try_load_search(
+        &self,
+        model_dir: &std::path::Path,
+        lance_db: &std::path::Path,
+    ) -> brain_lib::error::Result<SearchService> {
+        use brain_lib::embedder::Embedder;
+        use brain_persistence::store::Store;
+
+        let db = self.stores.inner_db();
+        let mut store = Store::open_or_create(lance_db).await?;
+        brain_lib::pipeline::ensure_schema_version(&db, &mut store).await?;
+        store.set_db(Arc::new(db.clone()));
+        let embedder: Arc<dyn Embed> = Arc::new(Embedder::load(model_dir)?);
+        let store_reader = brain_persistence::store::StoreReader::from_store(&store);
+        Ok(SearchService {
+            store: store_reader,
+            embedder,
+        })
+    }
+
+    /// Stub for when the `embed` feature is disabled.
+    #[cfg(not(feature = "embed"))]
+    async fn try_load_search(
+        &self,
+        _model_dir: &std::path::Path,
+        _lance_db: &std::path::Path,
+    ) -> brain_lib::error::Result<SearchService> {
+        Err(brain_lib::error::BrainCoreError::Embedding(
+            "search layer requires the embed feature".into(),
+        ))
+    }
+
+    fn metrics(&self) -> Result<Arc<brain_lib::metrics::Metrics>, RpcError> {
+        if let Some(m) = self.metrics.get() {
+            return Ok(Arc::clone(m));
+        }
+        let m = Arc::new(brain_lib::metrics::Metrics::new());
+        let _ = self.metrics.set(Arc::clone(&m));
+        Ok(m)
     }
 
     fn handle_tasks_list(&self, params: TasksListParams) -> Result<Response, RpcError> {
@@ -1508,14 +1544,15 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_memory_retrieve(&self, params: MemoryRetrieveParams) -> Result<Response, RpcError> {
-        let mcp_ctx = self.mcp_ctx()?;
+        let search_layer = self.search_layer()?;
+        let metrics = self.metrics()?;
         let semantic_ctx = brain_memory::context::SemanticContext {
-            db: mcp_ctx.stores.inner_db(),
-            brain_id: mcp_ctx.brain_id(),
-            brain_name: mcp_ctx.brain_name(),
-            store: mcp_ctx.store(),
-            embedder: mcp_ctx.embedder(),
-            metrics: &mcp_ctx.metrics,
+            db: self.stores.inner_db(),
+            brain_id: self.stores.brain_id.as_str(),
+            brain_name: self.stores.brain_name.as_str(),
+            store: Some(&search_layer.store),
+            embedder: Some(&search_layer.embedder),
+            metrics: &metrics,
         };
 
         let kinds: Vec<brain_lib::retrieval::MemoryKind> = params
@@ -1571,7 +1608,8 @@ impl BrainStoresDispatcher {
         let brains_pre = if retrieve_params.brains.is_empty() {
             Vec::new()
         } else {
-            self.build_federated_brain_list(&mcp_ctx, &retrieve_params.brains, runtime)?
+            let search_layer = self.search_layer()?;
+            self.build_federated_brain_list(search_layer, &retrieve_params.brains, runtime)?
         };
 
         let value = runtime
@@ -1587,14 +1625,15 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
-        let mcp_ctx = self.mcp_ctx()?;
+        let search_layer = self.search_layer()?;
+        let metrics = self.metrics()?;
         let semantic_ctx = brain_memory::context::SemanticContext {
-            db: mcp_ctx.stores.inner_db(),
-            brain_id: mcp_ctx.brain_id(),
-            brain_name: mcp_ctx.brain_name(),
-            store: mcp_ctx.store(),
-            embedder: mcp_ctx.embedder(),
-            metrics: &mcp_ctx.metrics,
+            db: self.stores.inner_db(),
+            brain_id: self.stores.brain_id.as_str(),
+            brain_name: self.stores.brain_name.as_str(),
+            store: Some(&search_layer.store),
+            embedder: Some(&search_layer.embedder),
+            metrics: &metrics,
         };
 
         let reflect_params = brain_memory::reflect::ReflectParams {
@@ -2019,14 +2058,6 @@ impl BrainStoresDispatcher {
         use brain_lib::retrieval::MemoryStub;
         use brain_lib::uri::SynapseUri;
 
-        let mcp_ctx = self.mcp_ctx()?;
-        let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
-            message: "records.search: search store unavailable".into(),
-        })?;
-        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
-            message: "records.search: embedder unavailable".into(),
-        })?;
-
         // Match the legacy MCP tool: cap k at 100 then over-request 3×
         // because the hybrid pipeline returns mixed kinds and we filter
         // down to `kind == "record"` post-pack. Cast through usize for
@@ -2044,20 +2075,24 @@ impl BrainStoresDispatcher {
             ..
         } = params;
 
-        let brain_id = mcp_ctx.brain_id().to_string();
-        let brain_name = mcp_ctx.brain_name().to_string();
+        let brain_id = self.stores.brain_id.clone();
+        let brain_name = self.stores.brain_name.clone();
 
         let runtime = self.runtime()?;
 
         let search_params = SearchParams::new(&query, "lookup", budget_tokens_usize, over_k, &tags)
             .with_brain_id(Some(brain_id.as_str()));
 
+        let search_layer = self.search_layer()?;
+        let metrics = self.metrics()?;
+        let store = &search_layer.store;
+        let embedder = &search_layer.embedder;
         let search_result = if brains.is_empty() {
             // Single-brain path. Borrowed pipeline so the embedder /
             // metrics references stay alive for the await below.
-            let pipeline = mcp_ctx
+            let pipeline = self
                 .stores
-                .query_pipeline(store, embedder, &mcp_ctx.metrics);
+                .query_pipeline(store, embedder, &metrics);
             runtime
                 .block_on(pipeline.search(&search_params))
                 .map_err(|e| RpcError::Unknown {
@@ -2067,11 +2102,10 @@ impl BrainStoresDispatcher {
             // Federated path. `include_scores=false` keeps the per-signal
             // breakdown off the wire — the legacy envelope doesn't carry
             // it either.
-            let federated_brains = self.build_federated_brain_list(&mcp_ctx, &brains, runtime)?;
-            let federated =
-                mcp_ctx
-                    .stores
-                    .federated_pipeline(federated_brains, embedder, &mcp_ctx.metrics);
+            let federated_brains = self.build_federated_brain_list(search_layer, &brains, runtime)?;
+            let federated = self
+                .stores
+                .federated_pipeline(federated_brains, embedder, &metrics);
             runtime
                 .block_on(federated.search(&search_params, false))
                 .map_err(|e| RpcError::Unknown {
@@ -2783,25 +2817,17 @@ impl BrainStoresDispatcher {
             cluster_params.cosine_threshold = threshold;
         }
 
-        let mcp_ctx = self.mcp_ctx()?;
+        let search_layer = self.search_layer()?;
         // Verbatim of `brain_lib::mcp::tools::MEMORY_UNAVAILABLE`; kept in
         // sync until brain_lib::mcp leaves and the daemon owns the wire
         // message outright.
-        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
-            message: "Memory tools are unavailable: embedding model not found.\n\
-                To download the model, either run the setup script:\n  \
-                curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash\n\
-                Or install the HuggingFace CLI manually:\n  \
-                pip install huggingface_hub\n  \
-                hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors --local-dir ~/.brain/models/bge-small-en-v1.5"
-                .to_string(),
-        })?;
+        let embedder = &search_layer.embedder;
 
         let runtime = self.runtime()?;
         let report = runtime
             .block_on(brain_lib::run_recluster(
-                mcp_ctx.stores.inner_db(),
-                &mcp_ctx.stores.brain_id,
+                self.stores.inner_db(),
+                &self.stores.brain_id,
                 embedder,
                 cluster_params,
             ))
@@ -2826,7 +2852,7 @@ impl BrainStoresDispatcher {
     /// deterministic rather than best-effort.
     fn build_federated_brain_list(
         &self,
-        mcp_ctx: &brain_lib::mcp::McpContext,
+        search_layer: &SearchService,
         brain_keys_input: &[String],
         runtime: &tokio::runtime::Runtime,
     ) -> Result<
@@ -2837,15 +2863,12 @@ impl BrainStoresDispatcher {
         )>,
         RpcError,
     > {
-        let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
-            message: "build_federated_brain_list: search layer unavailable".into(),
-        })?;
-        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
-            message: "build_federated_brain_list: embedder unavailable".into(),
-        })?;
+        let store = &search_layer.store;
+        let embedder = &search_layer.embedder;
 
-        let current_brain_name = mcp_ctx.brain_name();
-        let current_brain_id = mcp_ctx.brain_id();
+        let current_brain_name = self.stores.brain_name.as_str();
+        let current_brain_id = self.stores.brain_id.as_str();
+        let current_brain_home = &self.stores.brain_home;
 
         let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
             self.stores
@@ -2881,7 +2904,7 @@ impl BrainStoresDispatcher {
                 continue;
             }
             let remote_result = runtime.block_on(brain_lib::config::open_remote_search_context(
-                mcp_ctx.brain_home(),
+                current_brain_home,
                 key,
                 std::path::Path::new(""),
                 embedder,
@@ -3126,14 +3149,13 @@ impl BrainStoresDispatcher {
                 })?;
 
         // Populate runtime metrics from the daemon's Arc<Metrics>. When
-        // the MCP context is unavailable (semantic-memory bootstrap
-        // failure, LanceDB not yet provisioned, etc.) we still want to
-        // surface the task/job counts that callers depend on — fall
-        // back to a zeroed MetricsSnapshot rather than failing the
-        // whole brain.status call.
-        let metrics = match self.mcp_ctx() {
-            Ok(mcp_ctx) => {
-                let internal = mcp_ctx.metrics.snapshot();
+        // the search layer is unavailable (embedder not on disk, LanceDB
+        // not yet provisioned, etc.) we still want to surface the task/job
+        // counts that callers depend on — fall back to a zeroed
+        // MetricsSnapshot rather than failing the whole brain.status call.
+        let metrics = match self.metrics() {
+            Ok(m) => {
+                let internal = m.snapshot();
                 MetricsSnapshot {
                     uptime_seconds: internal.uptime_seconds,
                     indexing_latency: LatencyHistogram {
