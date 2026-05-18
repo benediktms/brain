@@ -447,7 +447,11 @@ pub async fn retrieve(ctx: &MemoryCtx, params: RetrieveParams) -> Result<()> {
 }
 
 /// Render a memory.retrieve result from the daemon RPC response.
-pub(crate) fn retrieve_render(json: bool, params: RetrieveParams, result: serde_json::Value) -> Result<()> {
+pub(crate) fn retrieve_render(
+    json: bool,
+    params: RetrieveParams,
+    result: serde_json::Value,
+) -> Result<()> {
     // The sync_tools_call result is the raw JSON value from the daemon.
     // If it has an `isError` field at top level, propagate it.
     if result.get("isError").and_then(|v| v.as_bool()) == Some(true) {

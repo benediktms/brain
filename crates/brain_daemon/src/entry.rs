@@ -370,7 +370,9 @@ mod tests {
     where
         F: FnOnce() + std::panic::UnwindSafe,
     {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Save and set.
         let saved: Vec<(&str, Option<String>)> = vars
             .iter()

@@ -81,8 +81,8 @@ impl McpTool for SagaCreate {
                 Err(err) => return ToolCallResult::error(format!("Failed to create saga: {err}")),
             };
 
-            let saga_value = serde_json::to_value(&saga)
-                .expect("SagaSummary should always serialize");
+            let saga_value =
+                serde_json::to_value(&saga).expect("SagaSummary should always serialize");
 
             json_response(&json!({
                 "saga_id": saga.saga_id,

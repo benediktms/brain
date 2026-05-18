@@ -1665,7 +1665,8 @@ impl<'de> serde::Deserialize<'de> for RecordContent {
                 let record_id = record_id.ok_or_else(|| de::Error::missing_field("record_id"))?;
                 let title = title.ok_or_else(|| de::Error::missing_field("title"))?;
                 let kind = kind.ok_or_else(|| de::Error::missing_field("kind"))?;
-                let content_hash = content_hash.ok_or_else(|| de::Error::missing_field("content_hash"))?;
+                let content_hash =
+                    content_hash.ok_or_else(|| de::Error::missing_field("content_hash"))?;
                 let size = size.ok_or_else(|| de::Error::missing_field("size"))?;
                 let encoding = encoding.ok_or_else(|| de::Error::missing_field("encoding"))?;
                 let uri = uri.ok_or_else(|| de::Error::missing_field("uri"))?;
@@ -1675,36 +1676,38 @@ impl<'de> serde::Deserialize<'de> for RecordContent {
                 match (encoding.as_str(), &text, &data_base64) {
                     ("utf-8", None, _) => {
                         return Err(de::Error::custom(
-                            "encoding 'utf-8' requires 'text' payload"
+                            "encoding 'utf-8' requires 'text' payload",
                         ));
                     }
                     ("utf-8", Some(_), Some(_)) => {
                         return Err(de::Error::custom(
-                            "RecordContent must have exactly one of 'text' or 'data' (both provided)"
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)",
                         ));
                     }
                     ("base64", _, None) => {
                         return Err(de::Error::custom(
-                            "encoding 'base64' requires 'data' payload"
+                            "encoding 'base64' requires 'data' payload",
                         ));
                     }
                     ("base64", Some(_), Some(_)) => {
                         return Err(de::Error::custom(
-                            "RecordContent must have exactly one of 'text' or 'data' (both provided)"
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)",
                         ));
                     }
                     ("utf-8", Some(_), None) | ("base64", None, Some(_)) => {
                         // Valid combinations
                     }
                     (enc, None, None) => {
-                        return Err(de::Error::custom(
-                            format!("RecordContent with encoding '{}' must have exactly one of 'text' or 'data' (neither provided)", enc)
-                        ));
+                        return Err(de::Error::custom(format!(
+                            "RecordContent with encoding '{}' must have exactly one of 'text' or 'data' (neither provided)",
+                            enc
+                        )));
                     }
                     (enc, _, _) => {
-                        return Err(de::Error::custom(
-                            format!("unknown encoding '{}' (expected 'utf-8' or 'base64')", enc)
-                        ));
+                        return Err(de::Error::custom(format!(
+                            "unknown encoding '{}' (expected 'utf-8' or 'base64')",
+                            enc
+                        )));
                     }
                 }
 

@@ -68,7 +68,12 @@ impl JsonRpcError {
     }
 
     pub fn method_not_found(id: Option<Value>, method: &str) -> String {
-        serde_json::to_string(&JsonRpcError::new(id, -32601, format!("Method not found: {method}"))).unwrap()
+        serde_json::to_string(&JsonRpcError::new(
+            id,
+            -32601,
+            format!("Method not found: {method}"),
+        ))
+        .unwrap()
     }
 
     pub fn invalid_params(id: Option<Value>, msg: impl Into<String>) -> String {

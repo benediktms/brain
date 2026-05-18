@@ -151,23 +151,18 @@ fn response_to_json(response: brain_rpc::Response) -> Result<serde_json::Value, 
         | Response::WatchAdded { .. }
         | Response::WatchRemoved { .. }
         | Response::WatchList { .. } => {
-            Ok(serde_json::to_value(response).map_err(|_| RpcError::Unknown {
-                message: "failed to serialize response".into(),
-            })?)
+            Ok(
+                serde_json::to_value(response).map_err(|_| RpcError::Unknown {
+                    message: "failed to serialize response".into(),
+                })?,
+            )
         }
     }
 }
 
 /// Build the appropriate `Request` from IPC tool name + params.
-fn build_rpc_request(
-    tool_name: &str,
-    brain: &str,
-    params: Value,
-) -> Result<Request, String> {
-    let params = params
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Request, String> {
+    let params = params.as_object().cloned().unwrap_or_default();
 
     // Convenience: build a brains list for multi-brain queries
     let brains_list = if brain.is_empty() {
@@ -189,10 +184,18 @@ fn build_rpc_request(
         // ── tasks ────────────────────────────────────────────────────
         "tasks.list" => Request::TasksList {
             params: brain_rpc::TasksListParams {
-                status: params.get("status").and_then(|v| v.as_str().map(|s| s.to_string())),
-                priority: params.get("priority").and_then(|v| v.as_u64().map(|n| n as u8)),
-                limit: params.get("limit").and_then(|v| v.as_u64().map(|n| n as u32)),
-                search: params.get("search").and_then(|v| v.as_str().map(|s| s.to_string())),
+                status: params
+                    .get("status")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                priority: params
+                    .get("priority")
+                    .and_then(|v| v.as_u64().map(|n| n as u8)),
+                limit: params
+                    .get("limit")
+                    .and_then(|v| v.as_u64().map(|n| n as u32)),
+                search: params
+                    .get("search")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 ..Default::default()
             },
         },
@@ -210,7 +213,9 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                description: params.get("description").and_then(|v| v.as_str().map(|s| s.to_string())),
+                description: params
+                    .get("description")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 priority: params
                     .get("priority")
                     .and_then(|v| v.as_u64())
@@ -221,8 +226,12 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("task")
                     .to_string(),
-                assignee: params.get("assignee").and_then(|v| v.as_str().map(|s| s.to_string())),
-                parent: params.get("parent").and_then(|v| v.as_str().map(|s| s.to_string())),
+                assignee: params
+                    .get("assignee")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                parent: params
+                    .get("parent")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             },
         },
         "tasks.next" => Request::TasksNext,
@@ -234,9 +243,21 @@ fn build_rpc_request(
         // ── memory ───────────────────────────────────────────────────
         "memory.write_episode" => Request::MemoryWriteEpisode {
             params: brain_rpc::MemoryWriteEpisodeParams {
-                goal: params.get("goal").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default(),
-                actions: params.get("actions").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default(),
-                outcome: params.get("outcome").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default(),
+                goal: params
+                    .get("goal")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                actions: params
+                    .get("actions")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                outcome: params
+                    .get("outcome")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
                 tags: params
                     .get("tags")
                     .and_then(|v| v.as_array())
@@ -251,15 +272,27 @@ fn build_rpc_request(
                     .and_then(|v| v.as_f64())
                     .map(|f| (f * 1000.0) as u32)
                     .unwrap_or(1000),
-                continues: params.get("continues").and_then(|v| v.as_str().map(|s| s.to_string())),
+                continues: params
+                    .get("continues")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             },
         },
         "memory.retrieve" => Request::MemoryRetrieve {
             params: brain_rpc::MemoryRetrieveParams {
-                query: params.get("query").and_then(|v| v.as_str().map(|s| s.to_string())),
-                lod: params.get("lod").and_then(|v| v.as_str()).unwrap_or("L0").to_string(),
+                query: params
+                    .get("query")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                lod: params
+                    .get("lod")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("L0")
+                    .to_string(),
                 count: params.get("count").and_then(|v| v.as_u64()).unwrap_or(10),
-                strategy: params.get("strategy").and_then(|v| v.as_str()).unwrap_or("auto").to_string(),
+                strategy: params
+                    .get("strategy")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto")
+                    .to_string(),
                 brains: brains_list,
                 ..Default::default()
             },
@@ -272,18 +305,36 @@ fn build_rpc_request(
         "memory.consolidate" => Request::MemoryConsolidate {
             params: brain_rpc::MemoryConsolidateParams {
                 limit: params.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize,
-                gap_seconds: params.get("gap_seconds").and_then(|v| v.as_i64()).unwrap_or(3600),
-                auto_summarize: params.get("auto_summarize").and_then(|v| v.as_bool()).unwrap_or(false),
+                gap_seconds: params
+                    .get("gap_seconds")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(3600),
+                auto_summarize: params
+                    .get("auto_summarize")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             },
         },
         "memory.reflect" => Request::MemoryReflect {
             params: brain_rpc::MemoryReflectParams {
                 commit: true,
-                topic: params.get("topic").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                budget: params.get("budget_tokens").and_then(|v| v.as_u64()).unwrap_or(2000) as usize,
+                topic: params
+                    .get("topic")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                budget: params
+                    .get("budget_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2000) as usize,
                 brains: brains_list,
-                title: params.get("title").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                content: params.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                title: params
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                content: params
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 source_ids: params
                     .get("source_ids")
                     .and_then(|v| v.as_array())
@@ -312,12 +363,20 @@ fn build_rpc_request(
         // ── links ─────────────────────────────────────────────────────
         "links.add" => Request::LinksAdd {
             params: brain_rpc::LinksAddParams {
-                from: params.get("from")
+                from: params
+                    .get("from")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or(brain_rpc::WireEntityRef { kind: "".into(), id: "".into() }),
-                to: params.get("to")
+                    .unwrap_or(brain_rpc::WireEntityRef {
+                        kind: "".into(),
+                        id: "".into(),
+                    }),
+                to: params
+                    .get("to")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or(brain_rpc::WireEntityRef { kind: "".into(), id: "".into() }),
+                    .unwrap_or(brain_rpc::WireEntityRef {
+                        kind: "".into(),
+                        id: "".into(),
+                    }),
                 edge_kind: params
                     .get("edge_kind")
                     .and_then(|v| v.as_str())
@@ -327,12 +386,20 @@ fn build_rpc_request(
         },
         "links.remove" => Request::LinksRemove {
             params: brain_rpc::LinksRemoveParams {
-                from: params.get("from")
+                from: params
+                    .get("from")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or(brain_rpc::WireEntityRef { kind: "".into(), id: "".into() }),
-                to: params.get("to")
+                    .unwrap_or(brain_rpc::WireEntityRef {
+                        kind: "".into(),
+                        id: "".into(),
+                    }),
+                to: params
+                    .get("to")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or(brain_rpc::WireEntityRef { kind: "".into(), id: "".into() }),
+                    .unwrap_or(brain_rpc::WireEntityRef {
+                        kind: "".into(),
+                        id: "".into(),
+                    }),
                 edge_kind: params
                     .get("edge_kind")
                     .and_then(|v| v.as_str())
@@ -342,10 +409,21 @@ fn build_rpc_request(
         },
         "links.for_entity" => Request::LinksForEntity {
             params: brain_rpc::LinksForEntityParams {
-                entity: params.get("entity").and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or(brain_rpc::WireEntityRef { kind: "".into(), id: "".into() }),
-                direction: params.get("direction").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default(),
-                limit: params.get("limit").and_then(|v| v.as_u64().map(|n| n as u32)),
+                entity: params
+                    .get("entity")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or(brain_rpc::WireEntityRef {
+                        kind: "".into(),
+                        id: "".into(),
+                    }),
+                direction: params
+                    .get("direction")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                limit: params
+                    .get("limit")
+                    .and_then(|v| v.as_u64().map(|n| n as u32)),
             },
         },
         // ── sagas ──────────────────────────────────────────────────────
@@ -359,7 +437,9 @@ fn build_rpc_request(
                     .get("include_cancelled")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
-                containing_brain: params.get("containing_brain").and_then(|v| v.as_str().map(|s| s.to_string())),
+                containing_brain: params
+                    .get("containing_brain")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             },
         },
         "sagas.get" => Request::SagasGet {
@@ -376,7 +456,9 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                description: params.get("description").and_then(|v| v.as_str().map(|s| s.to_string())),
+                description: params
+                    .get("description")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             },
         },
         "sagas.update" => Request::SagasUpdate {
@@ -386,11 +468,15 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                title: params.get("title").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                description: params
-                    .get("description")
+                title: params
+                    .get("title")
                     .and_then(|v| v.as_str())
-                    .map(|s| SagaDescriptionUpdate::Set { value: s.to_string() }),
+                    .map(|s| s.to_string()),
+                description: params.get("description").and_then(|v| v.as_str()).map(|s| {
+                    SagaDescriptionUpdate::Set {
+                        value: s.to_string(),
+                    }
+                }),
             },
         },
         "sagas.start" => Request::SagasStart {
@@ -484,7 +570,9 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                reason: params.get("reason").and_then(|v| v.as_str().map(|s| s.to_string())),
+                reason: params
+                    .get("reason")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
             },
         },
         "records.search" => Request::RecordsSearch {
@@ -494,10 +582,7 @@ fn build_rpc_request(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                k: params
-                    .get("k")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(10),
+                k: params.get("k").and_then(|v| v.as_u64()).unwrap_or(10),
                 budget_tokens: params
                     .get("budget_tokens")
                     .and_then(|v| v.as_u64())
@@ -527,8 +612,12 @@ fn build_rpc_request(
         // ── tags ──────────────────────────────────────────────────────
         "tags.aliases_list" => Request::TagsAliasesList {
             params: brain_rpc::TagsAliasesListParams {
-                canonical: params.get("canonical").and_then(|v| v.as_str().map(|s| s.to_string())),
-                cluster_id: params.get("cluster_id").and_then(|v| v.as_str().map(|s| s.to_string())),
+                canonical: params
+                    .get("canonical")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                cluster_id: params
+                    .get("cluster_id")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 limit: params.get("limit").and_then(|v| v.as_i64()).unwrap_or(50),
                 offset: params.get("offset").and_then(|v| v.as_i64()).unwrap_or(0),
             },
@@ -543,8 +632,12 @@ fn build_rpc_request(
         "status" => Request::BrainStatus,
         "jobs.status" => Request::JobsStatus {
             params: brain_rpc::JobsStatusParams {
-                kind: params.get("kind").and_then(|v| v.as_str().map(|s| s.to_string())),
-                status: params.get("status").and_then(|v| v.as_str().map(|s| s.to_string())),
+                kind: params
+                    .get("kind")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                status: params
+                    .get("status")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 limit: params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10),
             },
         },
