@@ -74,6 +74,7 @@ tokio = { workspace = true, features = ["rt"] }
 notify-debouncer-full = { version = "0.7" }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"

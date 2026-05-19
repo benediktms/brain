@@ -79,6 +79,13 @@ pub fn run_cli() -> std::process::ExitCode {
         return ExitCode::from(2);
     };
 
+    // Install a tracing subscriber so events from brain_lib (RPC dispatch spans)
+    // are visible in the daemon's stderr. The EnvFilter reads RUST_LOG as usual,
+    // defaulting to info if unset.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     // If --sqlite-db was not supplied, derive a default from $BRAIN_HOME
     // (or $HOME/.brain/ if BRAIN_HOME is unset) — but only when the
     // resolved file actually exists. This lets `connect_or_spawn` auto-
