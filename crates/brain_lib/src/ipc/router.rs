@@ -168,11 +168,6 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
             },
         },
         "tasks.next" => Request::TasksNext,
-        "tasks.apply_event" => Request::TasksApplyEvent {
-            params: brain_rpc::TasksApplyEventParams {
-                event_json: serde_json::to_value(&params).unwrap_or_default(),
-            },
-        },
         // ── memory ───────────────────────────────────────────────────
         "memory.write_episode" => Request::MemoryWriteEpisode {
             params: brain_rpc::MemoryWriteEpisodeParams {
@@ -616,11 +611,6 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
             },
         },
         "tags.aliases_status" => Request::TagsAliasesStatus,
-        "tags.recluster" => Request::TagsRecluster {
-            params: brain_rpc::TagsReclusterParams {
-                params_json: serde_json::to_value(&params).unwrap_or_default(),
-            },
-        },
         // ── status ───────────────────────────────────────────────────
         "status" => Request::BrainStatus,
         "jobs.status" => Request::JobsStatus {
