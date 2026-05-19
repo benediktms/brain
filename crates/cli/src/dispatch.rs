@@ -254,22 +254,28 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     commands::config::run_config_set(&cli.sqlite_db, &brain_name, &key, value)?;
                 }
                 ConfigAction::Provider { action } => match action {
-                    ProviderAction::Set { name, api_key } => {
+                    ProviderAction::Set {
+                        name,
+                        api_key,
+                        remote,
+                    } => {
                         commands::provider::run_set(
                             &cli.sqlite_db,
                             Some(&cli.lance_db),
                             &name,
                             api_key.as_deref(),
+                            remote,
                         )?;
                     }
                     ProviderAction::List { remote } => {
                         commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db), remote)?;
                     }
-                    ProviderAction::Remove { target } => {
+                    ProviderAction::Remove { target, remote } => {
                         commands::provider::run_remove(
                             &cli.sqlite_db,
                             Some(&cli.lance_db),
                             &target,
+                            remote,
                         )?;
                     }
                 },
@@ -1273,11 +1279,19 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             JobsAction::Status { json, remote } => {
                 commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json, remote)?;
             }
-            JobsAction::Retry { job_id } => {
-                commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id)?;
+            JobsAction::Retry { job_id, remote } => {
+                commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id, remote)?;
             }
-            JobsAction::Gc { older_than_days } => {
-                commands::jobs::run_gc(&cli.sqlite_db, Some(&cli.lance_db), older_than_days)?;
+            JobsAction::Gc {
+                older_than_days,
+                remote,
+            } => {
+                commands::jobs::run_gc(
+                    &cli.sqlite_db,
+                    Some(&cli.lance_db),
+                    older_than_days,
+                    remote,
+                )?;
             }
         },
     }

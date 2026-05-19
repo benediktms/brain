@@ -25,19 +25,19 @@
 
 use crate::domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
-    DocumentSummary, JobsStatusParams, JobsStatusReport, LinksAddParams, LinksForEntityParams,
-    LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
-    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary, RecordContent,
-    RecordsArchiveParams, RecordsCreateParams, RecordsFetchContentParams, RecordsLinkParams,
-    RecordsListParams, RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request,
-    Response, RpcError, SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount,
-    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
-    SnapshotSummary, TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams,
-    TagsReclusterParams, TaskSummary, TasksApplyEventParams, TasksCreateParams,
-    TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary, WireLinkSummary,
-    WireTaskLabelSummary,
+    DocumentSummary, JobsGcParams, JobsRetryParams, JobsStatusParams, JobsStatusReport,
+    LinksAddParams, LinksForEntityParams, LinksRemoveParams, MemoryConsolidateParams,
+    MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    ProviderRemoveParams, ProviderSetParams, ProviderSummary, RecordContent, RecordsArchiveParams,
+    RecordsCreateParams, RecordsFetchContentParams, RecordsLinkParams, RecordsListParams,
+    RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
+    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
+    TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams,
+    TaskSummary, TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams,
+    TasksLabelsBatchParams, TasksListParams, TasksMutateParams, TasksTransferParams,
+    TasksUpdateParams, WatchSummary, WireBrainSummary, WireLinkSummary, WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1060,6 +1060,86 @@ impl<T: Transport> DaemonClient<T> {
             Response::JobsStatus { report } => Ok(report),
             other => Err(RpcError::Protocol {
                 message: format!("expected JobsStatus in reply to JobsStatus, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Retry a failed job via [`Request::JobsRetry`].
+    ///
+    /// Retries the job identified by `job_id`. The daemon returns
+    /// [`Response::JobsRetrySuccess`] on success.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::NotFound`] — no job with that ID exists or it is not
+    ///   in the Failed state.
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::JobsRetrySuccess`].
+    pub fn jobs_retry(&mut self, job_id: &str) -> Result<String, RpcError> {
+        let params = JobsRetryParams {
+            job_id: job_id.to_owned(),
+        };
+        match self.call(Request::JobsRetry { params })? {
+            Response::JobsRetrySuccess { job_id } => Ok(job_id),
+            other => Err(RpcError::Protocol {
+                message: format!("expected JobsRetrySuccess in reply to JobsRetry, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Delete completed jobs older than `older_than_days` via [`Request::JobsGc`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::JobsGcDone`].
+    pub fn jobs_gc(&mut self, older_than_days: u32) -> Result<u64, RpcError> {
+        let params = JobsGcParams { older_than_days };
+        match self.call(Request::JobsGc { params })? {
+            Response::JobsGcDone { deleted } => Ok(deleted),
+            other => Err(RpcError::Protocol {
+                message: format!("expected JobsGcDone in reply to JobsGc, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Set or upsert a provider API key via [`Request::ProviderSet`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::InvalidParams`] — the provider name is not in
+    ///   [`VALID_PROVIDERS`](crate::providers::VALID_PROVIDERS).
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ProviderSetDone`].
+    pub fn provider_set(&mut self, name: &str, api_key: &str) -> Result<String, RpcError> {
+        let params = ProviderSetParams {
+            name: name.to_owned(),
+            api_key: api_key.to_owned(),
+        };
+        match self.call(Request::ProviderSet { params })? {
+            Response::ProviderSetDone { id } => Ok(id),
+            other => Err(RpcError::Protocol {
+                message: format!("expected ProviderSetDone in reply to ProviderSet, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Remove a provider via [`Request::ProviderRemove`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ProviderRemoveDone`].
+    pub fn provider_remove(&mut self, target: &str) -> Result<(), RpcError> {
+        let params = ProviderRemoveParams {
+            target: target.to_owned(),
+        };
+        match self.call(Request::ProviderRemove { params })? {
+            Response::ProviderRemoveDone => Ok(()),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected ProviderRemoveDone in reply to ProviderRemove, got {other:?}"
+                ),
             }),
         }
     }

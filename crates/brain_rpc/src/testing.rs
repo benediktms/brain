@@ -130,7 +130,11 @@ impl InMemoryTransport {
             | Request::TasksLabelsSummary
             | Request::MemoryWalkThread { .. }
             | Request::TagsRecluster { .. }
-            | Request::BrainsList { .. } => Err(RpcError::Unknown {
+            | Request::BrainsList { .. }
+            | Request::JobsRetry { .. }
+            | Request::JobsGc { .. }
+            | Request::ProviderSet { .. }
+            | Request::ProviderRemove { .. } => Err(RpcError::Unknown {
                 message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
                           sagas_* / memory_* / <kind>_* / watch_* / links_* / brains_* / \
                           tags_recluster requests — use \

@@ -196,7 +196,21 @@ pub fn run_status(
     Ok(())
 }
 
-pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Result<()> {
+pub fn run_retry(
+    sqlite_db: &Path,
+    lance_db: Option<&Path>,
+    job_id: &str,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        let mut client = rpc_client::connect_daemon()?;
+        let retried_id = client
+            .jobs_retry(job_id)
+            .map_err(|e| anyhow::anyhow!("JobsRetry rpc failed: {e}"))?;
+        println!("Retried job {retried_id} — it has been reset to pending.");
+        return Ok(());
+    }
+
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
 
     let job = stores
@@ -222,7 +236,26 @@ pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Res
     Ok(())
 }
 
-pub fn run_gc(sqlite_db: &Path, lance_db: Option<&Path>, older_than_days: u32) -> Result<()> {
+pub fn run_gc(
+    sqlite_db: &Path,
+    lance_db: Option<&Path>,
+    older_than_days: u32,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        let mut client = rpc_client::connect_daemon()?;
+        let deleted = client
+            .jobs_gc(older_than_days)
+            .map_err(|e| anyhow::anyhow!("JobsGc rpc failed: {e}"))?;
+        println!(
+            "Deleted {deleted} completed job{} older than {} day{}.",
+            if deleted == 1 { "" } else { "s" },
+            older_than_days,
+            if older_than_days == 1 { "" } else { "s" }
+        );
+        return Ok(());
+    }
+
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
 
     let age_secs = older_than_days as i64 * 86400;

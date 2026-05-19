@@ -136,7 +136,11 @@ fn echo_once(listener: UnixListener) {
             | Request::TasksLabelsSummary
             | Request::MemoryWalkThread { .. }
             | Request::TagsRecluster { .. }
-            | Request::BrainsList { .. } => {
+            | Request::BrainsList { .. }
+            | Request::JobsRetry { .. }
+            | Request::JobsGc { .. }
+            | Request::ProviderSet { .. }
+            | Request::ProviderRemove { .. } => {
                 unreachable!(
                     "echo_once test server is not configured to respond to tasks_* / records_* / \
                      sagas_* / memory_* / tags_* / jobs_* / status / provider_* / watch_* / \

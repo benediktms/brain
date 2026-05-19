@@ -2,15 +2,14 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use anyhow::Result;
-use brain_lib::config::{ProviderEntry, brain_home, load_global_config, save_global_config};
+use brain_lib::config::{brain_home, project_providers_to_config};
 use brain_lib::ports::ProviderStore;
+use brain_lib::providers::VALID_PROVIDERS;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::crypto;
 use brain_persistence::db::providers::InsertProvider;
 
 use crate::commands::rpc_client;
-
-const VALID_PROVIDERS: &[&str] = &["anthropic", "openai"];
 
 /// `brain config provider set <name> [api_key]`
 pub fn run_set(
@@ -18,7 +17,26 @@ pub fn run_set(
     lance_db: Option<&Path>,
     name: &str,
     api_key: Option<&str>,
+    remote: bool,
 ) -> Result<()> {
+    if remote {
+        // API key is required over RPC (no stdin prompt available)
+        let key = api_key.ok_or_else(|| {
+            anyhow::anyhow!(
+                "API key required for remote provider set; \
+                 pass it as a positional argument: brain config provider set {} <api-key>",
+                name
+            )
+        })?;
+
+        let mut client = rpc_client::connect_daemon()?;
+        let id = client
+            .provider_set(name, &key)
+            .map_err(|e| anyhow::anyhow!("ProviderSet rpc failed: {e}"))?;
+        println!("Provider '{name}' configured (id: {id})");
+        return Ok(());
+    }
+
     // Validate provider name
     if !VALID_PROVIDERS.contains(&name) {
         anyhow::bail!(
@@ -115,7 +133,21 @@ pub fn run_list(sqlite_db: &Path, lance_db: Option<&Path>, remote: bool) -> Resu
 }
 
 /// `brain config provider remove <target>`
-pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Result<()> {
+pub fn run_remove(
+    sqlite_db: &Path,
+    lance_db: Option<&Path>,
+    target: &str,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        let mut client = rpc_client::connect_daemon()?;
+        client
+            .provider_remove(target)
+            .map_err(|e| anyhow::anyhow!("ProviderRemove rpc failed: {e}"))?;
+        println!("Removed provider {target}");
+        return Ok(());
+    }
+
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
 
     // Try by ID first
@@ -143,24 +175,6 @@ pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Re
         matching.len(),
         if matching.len() == 1 { "" } else { "s" }
     );
-
-    Ok(())
-}
-
-/// Sync the providers list from DB to state_projection.toml (metadata only).
-fn project_providers_to_config(stores: &BrainStores) -> Result<()> {
-    let providers = stores.list_providers()?;
-    let entries: Vec<ProviderEntry> = providers
-        .iter()
-        .map(|p| ProviderEntry {
-            id: p.id.clone(),
-            name: p.name.clone(),
-        })
-        .collect();
-
-    let mut cfg = load_global_config()?;
-    cfg.providers = entries;
-    save_global_config(&cfg)?;
 
     Ok(())
 }

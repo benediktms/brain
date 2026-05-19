@@ -577,6 +577,10 @@ pub(crate) enum ProviderAction {
 
         /// API key (reads from stdin if omitted)
         api_key: Option<String>,
+
+        /// Route through brain-daemon over the local Unix socket (default: true)
+        #[arg(long, default_value = "true")]
+        remote: bool,
     },
 
     /// List configured providers (no keys shown)
@@ -590,6 +594,10 @@ pub(crate) enum ProviderAction {
     Remove {
         /// Provider ID or name to remove
         target: String,
+
+        /// Route through brain-daemon over the local Unix socket (default: true)
+        #[arg(long, default_value = "true")]
+        remote: bool,
     },
 }
 

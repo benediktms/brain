@@ -15,11 +15,17 @@ pub(crate) enum JobsAction {
     Retry {
         /// The job ID to retry
         job_id: String,
+        /// Route through brain-daemon over the local Unix socket (default: true)
+        #[arg(long, default_value = "true")]
+        remote: bool,
     },
     /// Run garbage collection on completed jobs
     Gc {
         /// Delete completed jobs older than this many days
         #[arg(long, default_value = "7")]
         older_than_days: u32,
+        /// Route through brain-daemon over the local Unix socket (default: true)
+        #[arg(long, default_value = "true")]
+        remote: bool,
     },
 }
