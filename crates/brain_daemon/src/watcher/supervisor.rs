@@ -36,6 +36,26 @@ use super::registry::{
 use super::routing::{build_prefix_map, event_primary_path, lookup_brain};
 use super::shutdown::{ShutdownOutcome, ShutdownReason, drain_with_timeout};
 
+/// Initialise the BrainRouter's RPC client after the daemon socket is listening.
+///
+/// This must be called *after* `IpcServer::bind` because `BrainRouter` acts as
+/// a client to its own socket — the socket must exist before `connect()` runs.
+fn init_router_client(
+    sock_path: &Path,
+    router: &Arc<brain_lib::ipc::router::BrainRouter>,
+) -> Result<()> {
+    let transport = brain_rpc::UnixSocketTransport::connect(sock_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to connect IPC transport to {}: {e}",
+            sock_path.display()
+        )
+    })?;
+    let client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("failed to hand off IPC transport to DaemonClient: {e}"))?;
+    router.set_client(client);
+    Ok(())
+}
+
 /// The long-running watcher supervisor. Owns per-brain pipelines and routes
 /// file events to the right one. The dispatcher talks to it via WatcherHandle.
 pub struct Supervisor {
@@ -189,27 +209,23 @@ impl Supervisor {
             .map(|h| h.join("brain.sock"))
             .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
 
-        // Create a router for this daemon's own IPC client connections. The
-        // router connects to the daemon's own socket, so the socket must be
-        // bound first (IpcServer::bind below).
-        let router = match BrainRouter::new(&sock_path, default_brain_id) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "failed to connect to daemon socket; continuing without IPC");
-                return Ok(ShutdownOutcome {
-                    clean: false,
-                    dropped_items: 0,
-                });
-            }
-        };
+        // Create a disconnected router — the socket doesn't exist yet (it gets
+        // bound by IpcServer::bind below). BrainRouter connects to its own
+        // socket, so the socket must be listening before connect() is called.
+        let router = BrainRouter::new_disconnected(default_brain_id);
 
-        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, router) {
+        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, router.clone()) {
             Ok(server) => {
                 let token = server.cancellation_token();
                 let inode = {
                     use std::os::unix::fs::MetadataExt;
                     std::fs::metadata(&sock_path).map(|m| m.ino()).unwrap_or(0)
                 };
+                // Now that the socket is listening, initialize the router's
+                // RPC client so IPC connections can be dispatched.
+                if let Err(e) = init_router_client(&sock_path, &router) {
+                    warn!(error = %e, "failed to connect IPC router to daemon socket; continuing without IPC");
+                }
                 tokio::spawn(async move { server.run().await });
                 info!(path = ?sock_path, "IPC server started");
                 (Some(token), inode)

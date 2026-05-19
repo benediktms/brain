@@ -20,17 +20,31 @@ use brain_rpc::{DaemonClient, Request, RpcError, SagaDescriptionUpdate, UnixSock
 /// shared handle) so that multiple IPC clients can be in-flight simultaneously.
 #[derive(Clone)]
 pub struct BrainRouter {
-    /// Shared RPC client handle. Each `dispatch` call briefly acquires the
-    /// std Mutex to clone the inner Arc<Mutex<DaemonClient>>, then releases
-    /// it before running the blocking call on the blocking thread pool.
+    /// Shared RPC client handle, set after the daemon socket is listening.
+    /// Each `dispatch` call briefly acquires the std Mutex to clone the
+    /// inner Arc<Mutex<DaemonClient>>, then releases it before running the
+    /// blocking call on the blocking thread pool.
     /// The inner Mutex protects `&mut DaemonClient` access; the outer Arc
     /// lets us clone cheaply so the std Mutex is held only briefly.
-    client: Arc<StdMutex<Arc<StdMutex<DaemonClient<UnixSocketTransport>>>>>,
+    client: Arc<StdMutex<Option<Arc<StdMutex<DaemonClient<UnixSocketTransport>>>>>>,
     /// brain_id of the default brain (used when no `brain` param is supplied).
     default_brain_id: String,
 }
 
 impl BrainRouter {
+    /// Create a new router with a placeholder client.
+    ///
+    /// Use [`set_client`](Self::set_client) to initialize the RPC client after
+    /// the daemon socket is bound and listening. This ordering is required
+    /// because `BrainRouter` acts as a client to its own socket — the socket
+    /// must exist before `connect()` is called.
+    pub fn new_disconnected(default_brain_id: String) -> Arc<Self> {
+        Arc::new(Self {
+            client: Arc::new(StdMutex::new(None)),
+            default_brain_id,
+        })
+    }
+
     /// Create a new router from a socket path and default brain_id.
     ///
     /// Connects to the daemon's socket (creating the transport in the
@@ -46,9 +60,17 @@ impl BrainRouter {
             format!("BrainRouter: failed to hand off transport to DaemonClient: {e}")
         })?;
         Ok(Arc::new(Self {
-            client: Arc::new(StdMutex::new(Arc::new(StdMutex::new(client)))),
+            client: Arc::new(StdMutex::new(Some(Arc::new(StdMutex::new(client))))),
             default_brain_id,
         }))
+    }
+
+    /// Set the RPC client after the daemon socket is listening.
+    ///
+    /// Call this after `IpcServer::bind` to avoid connecting to a socket
+    /// that doesn't exist yet.
+    pub fn set_client(self: &Arc<Self>, client: DaemonClient<UnixSocketTransport>) {
+        *self.client.lock().unwrap() = Some(Arc::new(StdMutex::new(client)));
     }
 
     /// Dispatch a tool call by forwarding it to the daemon via RPC.
@@ -69,11 +91,15 @@ impl BrainRouter {
             .unwrap_or_else(|| self.default_brain_id.clone());
 
         let request = build_rpc_request(tool_name, &resolved_brain, params)?;
-        // Briefly hold the outer std Mutex to clone the inner
-        // Arc<StdMutex<DaemonClient>>, then release it before running the
-        // blocking call on the blocking thread pool.
-        let inner_arc: Arc<StdMutex<DaemonClient<UnixSocketTransport>>> =
-            self.client.lock().unwrap().clone();
+        // Briefly hold the std Mutex to clone the inner Option<Arc<...>>,
+        // then release it before running the blocking call on the blocking
+        // thread pool.
+        let inner_arc = self
+            .client
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("BrainRouter client not set — call set_client() after IpcServer::bind");
         let response = tokio::task::block_in_place(|| {
             // Lock the inner Mutex to get &mut DaemonClient for the call.
             // block_in_place moves this to the blocking thread pool, so the
@@ -83,9 +109,7 @@ impl BrainRouter {
         })
         .map_err(|e| format!("RPC error: {e}"))?;
 
-        // Convert the RPC Response into a shape that IpcServer can
-        // serialize as a JSON-RPC response. brain_rpc Response carries
-        // the result in its own variants — flatten to a JSON Value.
+        // Convert the RPC Response into a JSON Value for IPC serialization.
         let value = response_to_json(response).map_err(|e| e.to_string())?;
         Ok(value)
     }
