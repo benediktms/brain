@@ -11,6 +11,7 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
+use tracing::{debug, error};
 
 use brain_rpc::{DaemonClient, Request, RpcError, SagaDescriptionUpdate, UnixSocketTransport};
 
@@ -78,6 +79,7 @@ impl BrainRouter {
             .map(|s| s.to_string())
             .unwrap_or_else(|| self.default_brain_id.clone());
 
+        debug!(tool = %tool_name, brain = %resolved_brain, "dispatching RPC call");
         let request = build_rpc_request(tool_name, &resolved_brain, params)?;
         let response = tokio::task::block_in_place(|| {
             // block_in_place moves this to the blocking thread pool so the
@@ -96,7 +98,10 @@ impl BrainRouter {
             let mut client = inner_arc.lock().unwrap();
             client.call(request)
         })
-        .map_err(|e| format!("RPC error: {e}"))?;
+        .map_err(|e| {
+            error!(tool = %tool_name, brain = %resolved_brain, error = %e, "RPC call failed");
+            format!("RPC error: {e}")
+        })?;
 
         // Convert the RPC Response into a JSON Value for IPC serialization.
         let value = response_to_json(response).map_err(|e| e.to_string())?;
