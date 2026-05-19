@@ -14,19 +14,27 @@ use serde_json::Value;
 
 use brain_rpc::{DaemonClient, Request, RpcError, SagaDescriptionUpdate, UnixSocketTransport};
 
+/// Shared RPC client handle.
+///
+/// Structure:
+/// - `Arc` — cheap cloning so multiple concurrent dispatches each get their
+///   own handle without moving the original
+/// - `StdMutex` — one-time init only; only `set_client` holds the write guard
+/// - `Option` — `None` until `set_client` is called after the socket is bound
+/// - `Arc<StdMutex<DaemonClient>>` — cheap to clone; each cloned handle is the
+///   token passed into `block_in_place`, and the inner `StdMutex` provides the
+///   mutable borrow for `call(&mut self)`
+type RpcClient = Arc<StdMutex<Option<Arc<StdMutex<DaemonClient<UnixSocketTransport>>>>>>;
+
 /// Routes JSON-RPC tool calls by forwarding them to the daemon via RPC.
 ///
 /// Each incoming connection gets its own `DaemonClient` (cloned from the
 /// shared handle) so that multiple IPC clients can be in-flight simultaneously.
 #[derive(Clone)]
 pub struct BrainRouter {
-    /// Shared RPC client handle, set after the daemon socket is listening.
-    /// Each `dispatch` call briefly acquires the std Mutex to clone the
-    /// inner Arc<Mutex<DaemonClient>>, then releases it before running the
-    /// blocking call on the blocking thread pool.
-    /// The inner Mutex protects `&mut DaemonClient` access; the outer Arc
-    /// lets us clone cheaply so the std Mutex is held only briefly.
-    client: Arc<StdMutex<Option<Arc<StdMutex<DaemonClient<UnixSocketTransport>>>>>>,
+    /// Shared RPC client handle. Set once via [`set_client`](Self::set_client)
+    /// after the daemon socket is bound and listening.
+    client: RpcClient,
     /// brain_id of the default brain (used when no `brain` param is supplied).
     default_brain_id: String,
 }
@@ -43,26 +51,6 @@ impl BrainRouter {
             client: Arc::new(StdMutex::new(None)),
             default_brain_id,
         })
-    }
-
-    /// Create a new router from a socket path and default brain_id.
-    ///
-    /// Connects to the daemon's socket (creating the transport in the
-    /// process) so multiple IPC clients can share one connection handle
-    /// cloned from `self.client`.
-    pub fn new(
-        socket_path: &std::path::Path,
-        default_brain_id: String,
-    ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
-        let transport = UnixSocketTransport::connect(socket_path)
-            .map_err(|e| format!("BrainRouter: failed to connect to daemon socket: {e}"))?;
-        let client = DaemonClient::connect(transport).map_err(|e| {
-            format!("BrainRouter: failed to hand off transport to DaemonClient: {e}")
-        })?;
-        Ok(Arc::new(Self {
-            client: Arc::new(StdMutex::new(Some(Arc::new(StdMutex::new(client))))),
-            default_brain_id,
-        }))
     }
 
     /// Set the RPC client after the daemon socket is listening.
@@ -91,19 +79,17 @@ impl BrainRouter {
             .unwrap_or_else(|| self.default_brain_id.clone());
 
         let request = build_rpc_request(tool_name, &resolved_brain, params)?;
-        // Briefly hold the std Mutex to clone the inner Option<Arc<...>>,
-        // then release it before running the blocking call on the blocking
-        // thread pool.
-        let inner_arc = self
-            .client
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("BrainRouter client not set — call set_client() after IpcServer::bind");
         let response = tokio::task::block_in_place(|| {
-            // Lock the inner Mutex to get &mut DaemonClient for the call.
-            // block_in_place moves this to the blocking thread pool, so the
+            // block_in_place moves this to the blocking thread pool so the
             // blocking I/O does not starve the async runtime.
+            // Lock the Mutex, then clone the inner Arc so the MutexGuard is
+            // released before we call block_in_place (which would otherwise
+            // hold the guard across the blocking call).
+            let inner_arc = {
+                let mut guard = self.client.lock().unwrap();
+                guard.take().expect("BrainRouter client not set — call set_client() after IpcServer::bind")
+            };
+            // inner_arc is Arc<DaemonClient>, owned; lock it to get &mut DaemonClient.
             let mut client = inner_arc.lock().unwrap();
             client.call(request)
         })

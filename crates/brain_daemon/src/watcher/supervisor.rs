@@ -56,6 +56,7 @@ fn init_router_client(
     Ok(())
 }
 
+
 /// The long-running watcher supervisor. Owns per-brain pipelines and routes
 /// file events to the right one. The dispatcher talks to it via WatcherHandle.
 pub struct Supervisor {
