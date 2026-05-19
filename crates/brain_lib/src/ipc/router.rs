@@ -533,10 +533,16 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
         // ── records ───────────────────────────────────────────────────
         "records.list" => Request::ArtifactsList {
             params: brain_rpc::ArtifactsListParams {
-                kind: params.get("kind").and_then(|v| v.as_str().map(String::from)),
+                kind: params
+                    .get("kind")
+                    .and_then(|v| v.as_str().map(String::from)),
                 tag: params.get("tag").and_then(|v| v.as_str().map(String::from)),
-                status: params.get("status").and_then(|v| v.as_str().map(String::from)),
-                limit: params.get("limit").and_then(|v| v.as_u64().map(|n| n as u32)),
+                status: params
+                    .get("status")
+                    .and_then(|v| v.as_str().map(String::from)),
+                limit: params
+                    .get("limit")
+                    .and_then(|v| v.as_u64().map(|n| n as u32)),
             },
         },
         "records.archive" => Request::RecordsArchive {

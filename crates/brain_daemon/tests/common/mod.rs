@@ -45,6 +45,11 @@ impl Drop for ChildGuard {
 pub struct ServerGuard {
     pub shutdown: Option<brain_daemon::ShutdownHandle>,
     pub handle: Option<std::thread::JoinHandle<Result<(), brain_rpc::RpcError>>>,
+    /// Guards the BRAIN_HOME env var and lock for the server lifetime.
+    /// Stored as separate Option fields so `ServerGuard` remains `Send`.
+    pub brain_home_lock: Option<std::sync::MutexGuard<'static, ()>>,
+    /// Arc<TempDir> so both the thread and ServerGuard can own references.
+    pub brain_home_guard: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl Drop for ServerGuard {
@@ -56,5 +61,10 @@ impl Drop for ServerGuard {
             // The accept loop polls every 50ms, so join completes quickly after shutdown.
             let _ = std::thread::JoinHandle::join(h);
         }
+        // Drop the BRAIN_HOME lock and env guard only after the server thread
+        // has been joined — brain_home() is resolved at dispatch time, not
+        // startup, so the guards must live for the entire server lifetime.
+        drop(self.brain_home_lock.take());
+        drop(self.brain_home_guard.take());
     }
 }

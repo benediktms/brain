@@ -14,16 +14,13 @@
 mod common;
 
 use std::os::unix::net::UnixStream;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
 use brain_lib::stores::BrainStores;
-use brain_rpc::{
-    DaemonClient, Request, Response, RpcError, TasksListParams,
-    UnixSocketTransport,
-};
+use brain_rpc::{DaemonClient, Request, Response, RpcError, TasksListParams, UnixSocketTransport};
 use tempfile::TempDir;
 
 /// Process-wide lock serializing BRAIN_HOME mutations across concurrent tests.
@@ -73,6 +70,8 @@ fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) 
         common::ServerGuard {
             shutdown: Some(shutdown),
             handle: Some(handle),
+            brain_home_lock: None,
+            brain_home_guard: None,
         },
     )
 }
@@ -169,11 +168,16 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     let config = DaemonConfig::new(&sock_path);
     let server = UnixSocketServer::bind(&config, dispatcher).expect("bind");
     let shutdown = server.shutdown_handle();
-    // `guard` is moved into the thread so it stays alive as long as the
-    // server thread runs (brain_home() is called at dispatch time, not startup).
-    let handle = thread::spawn(move || {
-        let _guard = guard;
-        server.run()
+    // Arc so both the thread and ServerGuard can own the TempDir. The Arc
+    // stays in this function and goes into ServerGuard; a clone goes to the
+    // thread. _lock stays here (MutexGuard is not Send).
+    let guard_arc = Arc::new(guard);
+    let handle = thread::spawn({
+        let guard_arc = guard_arc.clone();
+        move || {
+            let _guard = guard_arc;
+            server.run()
+        }
     });
     // Poll the socket for readiness. BrainStores init can take longer than
     // DefaultDispatcher, so allow up to 500ms (matching brain_mcp's spawn_daemon
@@ -181,22 +185,17 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     wait_for_socket_ready(&sock_path, Duration::from_millis(500))
         .expect("server socket not ready within 500ms");
 
-    // Lock and BRAIN_HOME stay set until after ServerGuard::drop, so the
-    // server thread never sees the real developer's ~/.brain/. The lock
-    // is dropped here so the thread can freely read BRAIN_HOME at dispatch.
-    unsafe { std::env::remove_var("BRAIN_HOME") };
-    drop(_lock);
-
     (
         tmp,
         sock_path,
         common::ServerGuard {
             shutdown: Some(shutdown),
             handle: Some(handle),
+            brain_home_lock: Some(_lock),
+            brain_home_guard: Some(guard_arc),
         },
     )
 }
-
 #[test]
 fn tasks_list_empty_db_via_real_stores() {
     let (_tmp, sock_path, _guard) = spawn_brain_stores_server();
