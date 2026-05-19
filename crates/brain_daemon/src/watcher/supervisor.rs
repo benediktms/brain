@@ -193,7 +193,10 @@ impl Supervisor {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "failed to connect to daemon socket; continuing without IPC");
-                return Ok(());
+                return Ok(ShutdownOutcome {
+                    clean: false,
+                    dropped_items: 0,
+                });
             }
         };
 
