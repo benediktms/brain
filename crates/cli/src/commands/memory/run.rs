@@ -990,6 +990,7 @@ pub fn consolidate_remote(
                 limit,
                 gap_seconds,
                 auto_summarize,
+                brain_id: None,
             },
         })
         .map_err(|e| anyhow::anyhow!("MemoryConsolidate rpc failed: {e}"))?;

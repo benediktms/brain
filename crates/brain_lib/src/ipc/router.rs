@@ -304,6 +304,9 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                     .get("auto_summarize")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                brain_id: params
+                    .get("brain_id")
+                    .and_then(|v| v.as_str().filter(|s| !s.is_empty()).map(String::from)),
             },
         },
         "memory.reflect" => Request::MemoryReflect {

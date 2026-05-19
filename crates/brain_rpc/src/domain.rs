@@ -1047,6 +1047,10 @@ pub struct MemoryConsolidateParams {
     pub limit: usize,
     pub gap_seconds: i64,
     pub auto_summarize: bool,
+    /// Optionally scope consolidation to a specific brain. Defaults to the
+    /// daemon's own brain when `None`.
+    #[serde(default)]
+    pub brain_id: Option<String>,
 }
 
 /// Wire-format params for [`Request::MemorySummarizeScope`].

@@ -1417,19 +1417,22 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         use brain_lib::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
+        let brain_id = params.brain_id.as_deref().unwrap_or(&self.stores.brain_id);
+
         let episodes = self
             .stores
-            .list_episodes(params.limit, &self.stores.brain_id)
+            .list_episodes(params.limit, brain_id)
             .map_err(|e| RpcError::Unknown {
                 message: format!("list_episodes: {e}"),
             })?;
 
         let result = consolidate_episodes(episodes, params.gap_seconds);
         let jobs_enqueued = if params.auto_summarize {
-            enqueue_cluster_summarization(&self.stores, &result.clusters, &self.stores.brain_id)
-                .map_err(|e| RpcError::Unknown {
+            enqueue_cluster_summarization(&self.stores, &result.clusters, brain_id).map_err(
+                |e| RpcError::Unknown {
                     message: format!("enqueue cluster summarization: {e}"),
-                })?
+                },
+            )?
         } else {
             0
         };

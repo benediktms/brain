@@ -20,6 +20,8 @@ struct Params {
     gap_seconds: i64,
     #[serde(default)]
     auto_summarize: bool,
+    #[serde(default)]
+    brain_id: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -51,7 +53,8 @@ impl McpTool for MemoryConsolidate {
                 "properties": {
                     "limit": { "type": "integer", "description": "Maximum number of recent episodes to consider. Default: 50", "default": 50 },
                     "gap_seconds": { "type": "integer", "description": "Gap in seconds that separates two clusters. Default: 3600 (1 hour)", "default": 3600 },
-                    "auto_summarize": { "type": "boolean", "description": "Enqueue async LLM synthesis jobs for each cluster. Default: false", "default": false }
+                    "auto_summarize": { "type": "boolean", "description": "Enqueue async LLM synthesis jobs for each cluster. Default: false", "default": false },
+                    "brain_id": { "type": "string", "description": "Brain ID to scope consolidation to. Defaults to the daemon's current brain when omitted." }
                 },
                 "required": []
             }),
@@ -73,6 +76,7 @@ impl McpTool for MemoryConsolidate {
                 limit: parsed.limit,
                 gap_seconds: parsed.gap_seconds,
                 auto_summarize: parsed.auto_summarize,
+                brain_id: parsed.brain_id,
             };
 
             match ctx.with_client(|c| c.memory_consolidate(wire_params)).await {

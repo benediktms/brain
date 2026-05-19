@@ -3041,6 +3041,7 @@ mod tests {
                 limit: 10,
                 gap_seconds: 600,
                 auto_summarize: false,
+                brain_id: None,
             })
             .expect("memory_consolidate");
         assert_eq!(got, r#"{"cluster_count":0}"#);
@@ -3054,6 +3055,7 @@ mod tests {
             limit: 1,
             gap_seconds: 60,
             auto_summarize: false,
+            brain_id: None,
         }) {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("MemoryConsolidate"));
