@@ -2,6 +2,195 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2026-05-19
+
+### Bug Fixes
+
+- Correct default log level in entry.rs comment
+- Map resolve_task_id errors to appropriate caller-facing variants
+- Use as_ref().cloned() instead of take() in dispatch
+- Simplify RpcClient type alias and fix set_client/dispatch
+- Bind socket before connecting BrainRouter client
+- Remove duplicated match arm in supervisor IPC startup
+- Return ShutdownOutcome on BrainRouter connect failure
+- Make BrainRouter::new fallible
+- Remove routed arms for tasks.apply_event and tags.recluster
+- Don't hold std Mutex across blocking I/O in BrainRouter::dispatch
+- Address CodeRabbit review nitpicks
+- Keep BRAIN_HOME scoped to full server lifetime
+- Address two CodeRabbit review comments
+- Resolve remaining CI failures from brain_mcp extraction
+- Resolve CI clippy failures from brain_mcp extraction
+- CodeRabbit auto-fixes for PR #172 (#176)
+- Apply CodeRabbit auto-fixes
+- Apply CodeRabbit auto-fixes
+- Apply CodeRabbit auto-fixes
+- Remove needless borrow on db arg in ensure_schema_version
+- Add &mut to store arg in ensure_schema_version call
+- Remove needless borrow in handlers.rs
+- Address CodeRabbit review pass 5
+- Apply CodeRabbit auto-fixes
+- Wire records.fetch_content tool into registry
+- Round_trip BRAIN_HOME guard lifetime + registry_smoke tool list
+- Address CI failures (batch 3)
+- Add missing brains + members fields to sample_saga_summary
+- Address CodeRabbit review follow-ups (batch 2)
+- Add smoke tests for records.search and records.fetch_content
+- Assert non-empty content and add missing record tools
+- Replace fixed sleep with active readiness probe
+- Move _config_watcher binding to outer scope
+- Add ENV_LOCK mutex to with_env helper
+- Delete tests that spawn real brain-daemon subprocess
+- Delete flaky binary_smoke test + ignore env-leaking entry tests
+- Make tracing + notify-debouncer-full non-optional deps
+- Cfg-gate watcher module (single attribute)
+- Cfg-gate watcher module under embed feature
+- Remove duplicate cfg-gate on watcher module
+- Cfg-gate watcher module for embed feature
+- Address CodeRabbit review (batch 3 + Q1)
+- Address CodeRabbit review (pass 3)
+- Address CodeRabbit review (batch 3 + Q1)
+- Address CodeRabbit review (batch 2 — design responses)
+- Address CodeRabbit review (batch 1)
+- Address Phase D batch 1 architect review
+- Reject negative time_scope durations
+- Address CodeRabbit review on brain_memory + brain_rpc
+- Mock emberdder imports for latency benchmarks
+- Address code-review feedback on bounded capsule + RFC 3339 contract
+- Log instead of silently swallow invalid epoch timestamps
+- Make brain_daemon_path return a real file for stat'ing
+- Address CodeRabbit review findings on watcher migration
+- Plumb RPC shutdown handle through supervisor
+- Address CodeRabbit review findings on Stage 3 wire-up
+- Only auto-resolve --sqlite-db when the file exists
+- Cover new Request variants in CI build
+- Brain_daemon + brain_rpc reviewer-audit follow-ups (small subset) (#164)
+- Tighten direct-dep gate against renames + sync trait doc
+- Address reviewer-audit follow-ups (small subset)
+- Satisfy clippy on spawner.rs
+- Clippy — drop unused re-exports + collapse nested if
+- Enforce unique brain prefix via UNIQUE index (#160)
+- NULL out test-brain.prefix so get_prefix falls through to brain_meta
+- Set_prefix should target only the (unscoped) sentinel
+- Set_prefix helper must also target the (unscoped) sentinel
+- Apply prefix disambiguation to the init path and target test helper
+- Auto-disambiguate brain prefix on registration
+- Enforce unique brain prefix via UNIQUE index
+- Declare test-utils on brain-lib in dev-deps for sharded CI
+- Address PR review on cycle-detection move
+- Compute child_seq in set_parent / create_child_task helpers
+- Correct entity_links INSERT column name and timestamp format
+
+### Documentation
+
+- Correct stale crate-level claims post-migration
+- Document continues parameter and thread-building in mem-write (#150)
+
+### Features
+
+- Add brain_id parameter to scope consolidation
+- Wire records.search + records.fetch_content RPCs (#175)
+- Wire records.search + records.fetch_content RPCs (#174)
+- Wire records.search + records.fetch_content RPCs
+- Wire MetricsSnapshot + JobSummary lifecycle fields
+- Migrate remaining tool clusters (Phase D batches 2-7)
+- Migrate misc cluster (Phase D batch 1)
+- Production binary forwarder (Phase F)
+- Scaffold context/dispatch/server/handle/entry (Phase B/C)
+- Wire TasksApplyEvent dispatcher arm
+- Wire TasksDepsBatch dispatcher arm
+- Wire TasksLabelsBatch dispatcher arm
+- Wire TagsRecluster dispatcher arm
+- Wire 10 new dispatcher arms (links / records / brains / labels)
+- Scaffold new crate for MCP server extraction
+- Add typed DaemonClient methods + round-trip tests for new wire variants
+- Add wire variants for links / record mutations / task batch / walk / recluster / brains
+- Scaffold new crate for episodic memory domain
+- Move file-watcher supervisor into brain-daemon (#167)
+- Spawn watcher supervisor inside brain-daemon
+- Wire every active CLI family through brain-daemon (Stage 3) (#166)
+- Wire tags, jobs, status, provider through DaemonClient
+- Wire memory family through DaemonClient
+- Wire sagas family through DaemonClient
+- Wire records family through DaemonClient
+- Wire tasks family through DaemonClient with auto-spawn
+- Typed methods on DaemonClient (#165)
+- Typed methods on DaemonClient
+- Add brain_rpc + brain_daemon (centralized-writer foundation) (#163)
+- Route brain tasks list through brain-daemon (--remote)
+- Add brain_daemon crate + brain-daemon binary
+- Add brain_rpc contract crate
+- Typed write API — `RecordStore::create_*` hides event construction
+- Introduce Task domain type and thread through cli/MCP
+- Add records-archive, records-fetch-content, records-get, and records-list skills
+- Add tasks-transfer, tasks-create-remote, and tasks-labels-summary skills
+- Cascade flag on add_tasks / remove_tasks for subtree membership (#149)
+- Compact `saga-<hex>` short IDs alongside ULID (#147)
+
+### Refactoring
+
+- Extract brain_mcp crate (#172)
+- Complete brain_mcp crate extraction
+- Replace McpContext bootstrap handle with direct search_layer + metrics accessors
+- Move protocol + saga_validation from brain_lib
+- Brain_memory crate + brain_rpc wire variants (#171)
+- Rewire memory handlers to call brain_memory directly
+- Relocate memory.retrieve business logic
+- Relocate memory.reflect business logic + introduce SemanticContext
+- Relocate memory.write_episode business logic into brain_memory
+- Relocate memory.consolidate business logic into brain_memory
+- Relocate memory.summarize_scope + memory.write_procedure business logic
+- Relocate memory.walk_thread business logic into brain_memory
+- Extract brain_retrieval domain crate (#170)
+- Extract brain_retrieval domain crate
+- Extract brain_tags domain crate (#169)
+- Extract brain_tags domain crate
+- Take (&Db, &str) on run_recluster (#168)
+- Bundle run_inner args into resource/metadata structs
+- Take (&Db, &str) on run_recluster
+- Collapse watch + daemon-start to thin RPC clients
+- Consolidate tasks-family connect_or_spawn onto rpc_client helper
+- Extract shared test helpers to tests/common/mod.rs
+- Extract `brain_records` domain crate (#162)
+- Land round-4 review blockers
+- Seal the domain boundary — typed methods + private queries
+- Land triangulated review findings
+- Deslop pass after review
+- Drop `pub mod records` from brain_lib; delete duplicate
+- Switch BrainStores + 8 call sites to brain_records
+- Typed read API — Store returns `Record`, not `RecordRow`
+- Move records source into `brain_records` crate
+- Extract brain_sagas domain crate (#161)
+- Tighten domain layer after round-3 review
+- Expose domain::* layer; eliminate persistence row leaks
+- Tighten lifecycle encapsulation after round-2 review
+- Lift lifecycle orchestration into typed helpers
+- Tighten extraction after adversarial review
+- Eliminate raw SQL from brain_sagas tests
+- Extract brain_sagas domain crate
+- Move dependency cycle detection into brain_tasks (#159)
+- Move dependency cycle detection into brain_tasks
+- Relocate task projection + introduce Task domain type (#158)
+- Move event types and projection dispatcher to brain_tasks
+- Break event-type cycle via direct writer calls
+- Extract per-event task SQL writers
+- Drop the brain_lib::tasks alias (#157)
+- Drop the `pub use brain_tasks as tasks` alias
+- Extract brain_tasks domain crate from brain_lib (#156)
+- Wire brain_tasks into workspace + update imports
+- Extract brain_tasks domain crate from brain_lib
+- Gate candle behind optional embed feature (#155)
+- Extract brain_embedder crate to quarantine candle dependency (#153)
+- Extract brain_core crate and split ports/ along driven/driving boundary (#151)
+- Bundle SessionStart into Rust subcommand; replace per-turn UserPromptSubmit dump (#152)
+
+### Testing
+
+- Add BrainStoresDispatcher round-trip tests to round_trip.rs
+- Mirror embed feature for 2-arg BrainStoresDispatcher::new
+- Integration harness + smoke tests (Phase E)
+- Bump PROTOCOL_VERSION assertion to 2
+
 ## [0.4.1] - 2026-05-12
 
 ### Bug Fixes
