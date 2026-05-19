@@ -8,10 +8,9 @@
 //! once this module no longer imports from `crate::mcp`, brain_lib has
 //! zero knowledge of MCP tools or the tool registry.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 use brain_rpc::{DaemonClient, Request, RpcError, SagaDescriptionUpdate, UnixSocketTransport};
 
@@ -21,9 +20,12 @@ use brain_rpc::{DaemonClient, Request, RpcError, SagaDescriptionUpdate, UnixSock
 /// shared handle) so that multiple IPC clients can be in-flight simultaneously.
 #[derive(Clone)]
 pub struct BrainRouter {
-    /// Shared RPC client handle. Each `dispatch` call acquires a mutable
-    /// reference for the duration of one RPC round-trip.
-    client: Arc<Mutex<DaemonClient<UnixSocketTransport>>>,
+    /// Shared RPC client handle. Each `dispatch` call briefly acquires the
+    /// std Mutex to clone the inner Arc<Mutex<DaemonClient>>, then releases
+    /// it before running the blocking call on the blocking thread pool.
+    /// The inner Mutex protects `&mut DaemonClient` access; the outer Arc
+    /// lets us clone cheaply so the std Mutex is held only briefly.
+    client: Arc<StdMutex<Arc<StdMutex<DaemonClient<UnixSocketTransport>>>>>,
     /// brain_id of the default brain (used when no `brain` param is supplied).
     default_brain_id: String,
 }
@@ -40,7 +42,7 @@ impl BrainRouter {
         let client = DaemonClient::connect(transport)
             .expect("BrainRouter: failed to hand off transport to DaemonClient");
         Arc::new(Self {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(StdMutex::new(Arc::new(StdMutex::new(client)))),
             default_brain_id,
         })
     }
@@ -63,10 +65,19 @@ impl BrainRouter {
             .unwrap_or_else(|| self.default_brain_id.clone());
 
         let request = build_rpc_request(tool_name, &resolved_brain, params)?;
-        let mut client = self.client.lock().await;
-        let response = client
-            .call(request)
-            .map_err(|e| format!("RPC error: {e}"))?;
+        // Briefly hold the outer std Mutex to clone the inner
+        // Arc<StdMutex<DaemonClient>>, then release it before running the
+        // blocking call on the blocking thread pool.
+        let inner_arc: Arc<StdMutex<DaemonClient<UnixSocketTransport>>> =
+            self.client.lock().unwrap().clone();
+        let response = tokio::task::block_in_place(|| {
+            // Lock the inner Mutex to get &mut DaemonClient for the call.
+            // block_in_place moves this to the blocking thread pool, so the
+            // blocking I/O does not starve the async runtime.
+            let mut client = inner_arc.lock().unwrap();
+            client.call(request)
+        })
+        .map_err(|e| format!("RPC error: {e}"))?;
 
         // Convert the RPC Response into a shape that IpcServer can
         // serialize as a JSON-RPC response. brain_rpc Response carries
