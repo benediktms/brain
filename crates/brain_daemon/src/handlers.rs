@@ -4078,15 +4078,17 @@ fn deps_fan_response(
     }
 
     let source_input = brain_lib::uri::resolve_id(source);
-    let source_resolved = store
-        .resolve_task_id(&source_input)
-        .map_err(|e| {
-            if e.to_string().contains("ambiguous") {
-                RpcError::Protocol { message: format!("invalid/missing source_task_id: {e}") }
-            } else {
-                RpcError::NotFound { id: format!("source_task_id not found: {e}") }
+    let source_resolved = store.resolve_task_id(&source_input).map_err(|e| {
+        if e.to_string().contains("ambiguous") {
+            RpcError::Protocol {
+                message: format!("invalid/missing source_task_id: {e}"),
             }
-        })?;
+        } else {
+            RpcError::NotFound {
+                id: format!("source_task_id not found: {e}"),
+            }
+        }
+    })?;
     let source_compact = store.compact_id_or_raw(&source_resolved);
 
     let mut succeeded: Vec<serde_json::Value> = Vec::new();
@@ -4144,15 +4146,17 @@ fn deps_clear_response(
         })?;
 
     let input = brain_lib::uri::resolve_id(task_id);
-    let resolved = store
-        .resolve_task_id(&input)
-        .map_err(|e| {
-            if e.to_string().contains("ambiguous") {
-                RpcError::Protocol { message: format!("invalid/missing task_id: {e}") }
-            } else {
-                RpcError::NotFound { id: format!("task_id not found: {e}") }
+    let resolved = store.resolve_task_id(&input).map_err(|e| {
+        if e.to_string().contains("ambiguous") {
+            RpcError::Protocol {
+                message: format!("invalid/missing task_id: {e}"),
             }
-        })?;
+        } else {
+            RpcError::NotFound {
+                id: format!("task_id not found: {e}"),
+            }
+        }
+    })?;
 
     let deps = store
         .get_deps_for_task(&resolved)
