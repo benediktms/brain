@@ -36,15 +36,19 @@ impl BrainRouter {
     /// Connects to the daemon's socket (creating the transport in the
     /// process) so multiple IPC clients can share one connection handle
     /// cloned from `self.client`.
-    pub fn new(socket_path: &std::path::Path, default_brain_id: String) -> Arc<Self> {
+    pub fn new(
+        socket_path: &std::path::Path,
+        default_brain_id: String,
+    ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         let transport = UnixSocketTransport::connect(socket_path)
-            .expect("BrainRouter: failed to connect to daemon socket");
-        let client = DaemonClient::connect(transport)
-            .expect("BrainRouter: failed to hand off transport to DaemonClient");
-        Arc::new(Self {
+            .map_err(|e| format!("BrainRouter: failed to connect to daemon socket: {e}"))?;
+        let client = DaemonClient::connect(transport).map_err(|e| {
+            format!("BrainRouter: failed to hand off transport to DaemonClient: {e}")
+        })?;
+        Ok(Arc::new(Self {
             client: Arc::new(StdMutex::new(Arc::new(StdMutex::new(client)))),
             default_brain_id,
-        })
+        }))
     }
 
     /// Dispatch a tool call by forwarding it to the daemon via RPC.

@@ -189,7 +189,13 @@ impl Supervisor {
             .map(|h| h.join("brain.sock"))
             .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
 
-        let router = BrainRouter::new(&sock_path, default_brain_id);
+        let router = match BrainRouter::new(&sock_path, default_brain_id) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "failed to connect to daemon socket; continuing without IPC");
+                return Ok(());
+            }
+        };
 
         let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
             Ok(server) => {
