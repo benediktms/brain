@@ -768,10 +768,13 @@ impl BrainStores {
             Db::open(sqlite_db)?
         };
 
-        // Resolve brain_id from config registry.
+        // Resolve brain_id: try TOML registry first, then DB (supports
+        // brains registered via the daemon without a TOML entry), then
+        // fall back to empty string for legacy/unscoped mode.
         let brain_id = if !brain_name.is_empty() {
             config::resolve_brain_entry(&brain_name)
                 .and_then(|(name, entry)| config::resolve_brain_id(&entry, &name))
+                .or_else(|_| db.resolve_brain(&brain_name).map(|(id, _)| id))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -997,6 +1000,48 @@ mod tests {
             stores.brain_name.is_empty(),
             "dotfile directory name should not become brain_name, got: {:?}",
             stores.brain_name
+        );
+    }
+
+    #[test]
+    fn from_path_resolves_brain_id_from_db_when_toml_missing() {
+        // Brain registered in DB but not in TOML — from_path should resolve
+        // via db.resolve_brain even when TOML lookup fails.
+        let tmp = TempDir::new().unwrap();
+        let dot_brain = tmp.path().join(".brain");
+        std::fs::create_dir_all(&dot_brain).unwrap();
+
+        let sqlite_db = dot_brain.join("brain.db");
+        let db = Db::open(&sqlite_db).unwrap();
+
+        // Register brain directly in DB (simulates daemon startup with a
+        // current brain that was never in TOML).
+        let brain_name = "db-only-brain";
+        let brain_id = "dbBrain01";
+        db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+            brain_id,
+            name: brain_name,
+            prefix: "DBR",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
+
+        let lance_db = dot_brain.join("brains").join(brain_name).join("lancedb");
+        std::fs::create_dir_all(&lance_db).unwrap();
+
+        let stores = BrainStores::from_path(&sqlite_db, Some(&lance_db)).unwrap();
+
+        assert_eq!(
+            stores.brain_id, brain_id,
+            "from_path should resolve brain_id from DB when TOML has no entry"
+        );
+        assert_eq!(stores.brain_name, brain_name);
+        assert_eq!(
+            stores.tasks.brain_id, brain_id,
+            "TaskStore should mirror BrainStores::brain_id"
         );
     }
 
