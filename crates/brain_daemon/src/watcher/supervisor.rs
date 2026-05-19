@@ -189,6 +189,9 @@ impl Supervisor {
             .map(|h| h.join("brain.sock"))
             .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
 
+        // Create a router for this daemon's own IPC client connections. The
+        // router connects to the daemon's own socket, so the socket must be
+        // bound first (IpcServer::bind below).
         let router = match BrainRouter::new(&sock_path, default_brain_id) {
             Ok(r) => r,
             Err(e) => {
@@ -200,7 +203,7 @@ impl Supervisor {
             }
         };
 
-        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
+        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, router) {
             Ok(server) => {
                 let token = server.cancellation_token();
                 let inode = {
