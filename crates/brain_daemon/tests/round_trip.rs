@@ -148,6 +148,11 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
         .tempdir_in(tmp.path())
         .expect("BRAIN_HOME tempdir");
     // Lock serializes BRAIN_HOME mutations across concurrent tokio threads.
+    // Keep BRAIN_HOME set for the ENTIRE server lifetime — brain_home()
+    // is called at dispatch time, not just at startup. The lock and env
+    // var stay in place until after ServerGuard::drop (i.e., after the
+    // server thread has been shut down and joined), so no handler ever
+    // sees the real developer's ~/.brain/.
     let _lock = BRAIN_HOME_LOCK.lock().unwrap();
     unsafe { std::env::set_var("BRAIN_HOME", guard.path()) };
     let stores = match BrainStores::from_path(&sqlite_path, Some(&lance_path)) {
@@ -158,8 +163,6 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
             panic!("open BrainStores from temp paths: {e}");
         }
     };
-    unsafe { std::env::remove_var("BRAIN_HOME") };
-    drop(_lock);
 
     #[cfg(not(feature = "embed"))]
     let dispatcher = BrainStoresDispatcher::new(stores);
@@ -180,6 +183,12 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     // previous grace period, but now actively probing instead of fixed sleep).
     wait_for_socket_ready(&sock_path, Duration::from_millis(500))
         .expect("server socket not ready within 500ms");
+
+    // Lock and BRAIN_HOME stay set until after ServerGuard::drop, so the
+    // server thread never sees the real developer's ~/.brain/. The lock
+    // is dropped here so the thread can freely read BRAIN_HOME at dispatch.
+    unsafe { std::env::remove_var("BRAIN_HOME") };
+    drop(_lock);
 
     (
         tmp,
