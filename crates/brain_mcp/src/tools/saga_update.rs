@@ -73,6 +73,11 @@ impl McpTool for SagaUpdate {
             if let Err(msg) = validate_saga_id(&parsed.saga_id) {
                 return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
             }
+            if parsed.title.is_none() && parsed.description.is_none() {
+                return ToolCallResult::error(
+                    "At least one of 'title' or 'description' must be provided".to_string(),
+                );
+            }
             if let Some(t) = parsed.title.as_deref()
                 && let Err(msg) = validate_title(t)
             {

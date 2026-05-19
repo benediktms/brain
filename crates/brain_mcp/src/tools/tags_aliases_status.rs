@@ -31,9 +31,9 @@ impl McpTool for TagsAliasesStatus {
             name: self.name().into(),
             description: "Health summary for the synonym-clustering subsystem. \
                 Returns the latest tag_cluster_runs row (or null), total_aliases / \
-                total_clusters counts for the current brain, the current runtime \
-                embedder version, and an alias_coverage breakdown of canonical vs raw \
-                counts."
+                total_clusters counts for the current brain, and an alias_coverage \
+                breakdown of canonical vs raw counts. The runtime embedder version \
+                is not yet available via the wire protocol."
                 .into(),
             input_schema: json!({
                 "type": "object",
