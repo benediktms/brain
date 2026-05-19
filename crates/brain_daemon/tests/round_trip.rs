@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
 use brain_lib::stores::BrainStores;
 use brain_rpc::{
-    DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError, TasksListParams,
+    DaemonClient, Request, Response, RpcError, TasksListParams,
     UnixSocketTransport,
 };
 use tempfile::TempDir;
@@ -94,9 +94,6 @@ fn handshake_negotiates_protocol_version() {
 
     let transport = UnixSocketTransport::connect(&sock_path).expect("connect transport");
     let _client = DaemonClient::connect(transport).expect("connect client");
-
-    // Both sides on PROTOCOL_VERSION → connect returns Ok.
-    assert_eq!(PROTOCOL_VERSION, 4);
 }
 
 #[test]

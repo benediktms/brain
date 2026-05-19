@@ -78,86 +78,9 @@ impl BrainRouter {
 
 /// Convert a brain_rpc Response to a JSON Value for IPC serialization.
 fn response_to_json(response: brain_rpc::Response) -> Result<serde_json::Value, RpcError> {
-    use brain_rpc::Response;
-    match response {
-        Response::Pong
-        | Response::HandshakeOk { .. }
-        | Response::TasksList { .. }
-        | Response::TasksShow { .. }
-        | Response::TasksNext { .. }
-        | Response::TasksCreate { .. }
-        | Response::TasksUpdate { .. }
-        | Response::TasksMutate { .. }
-        | Response::TasksDepAdded { .. }
-        | Response::TasksDepRemoved { .. }
-        | Response::TasksLabelAdded { .. }
-        | Response::TasksLabelRemoved { .. }
-        | Response::TasksTransfer { .. }
-        | Response::RecordsVerify { .. }
-        | Response::AnalysesList { .. }
-        | Response::AnalysesShow { .. }
-        | Response::AnalysesCreate { .. }
-        | Response::ArtifactsList { .. }
-        | Response::ArtifactsShow { .. }
-        | Response::DocumentsList { .. }
-        | Response::DocumentsShow { .. }
-        | Response::DocumentsCreate { .. }
-        | Response::PlansList { .. }
-        | Response::PlansShow { .. }
-        | Response::PlansCreate { .. }
-        | Response::SnapshotsList { .. }
-        | Response::SnapshotsShow { .. }
-        | Response::SnapshotsCreate { .. }
-        | Response::SagasList { .. }
-        | Response::SagasGet { .. }
-        | Response::SagasCreate { .. }
-        | Response::SagasUpdate { .. }
-        | Response::SagasAddTasks { .. }
-        | Response::SagasRemoveTasks { .. }
-        | Response::SagasFrontier { .. }
-        | Response::SagasStart { .. }
-        | Response::SagasClose { .. }
-        | Response::SagasCancel { .. }
-        | Response::SagasReopen { .. }
-        | Response::SagasStats { .. }
-        | Response::MemoryWriteEpisode { .. }
-        | Response::MemoryWriteProcedure { .. }
-        | Response::MemoryRetrieve { .. }
-        | Response::MemoryConsolidate { .. }
-        | Response::MemorySummarizeScope { .. }
-        | Response::MemoryReflect { .. }
-        | Response::TagsAliasesList { .. }
-        | Response::TagsAliasesStatus { .. }
-        | Response::JobsStatus { .. }
-        | Response::BrainStatus { .. }
-        | Response::ProviderList { .. }
-        | Response::LinksAdd { .. }
-        | Response::LinksRemove { .. }
-        | Response::LinksForEntity { .. }
-        | Response::RecordsArchive { .. }
-        | Response::RecordsLinkAdd { .. }
-        | Response::RecordsLinkRemove { .. }
-        | Response::RecordsTagAdd { .. }
-        | Response::RecordsTagRemove { .. }
-        | Response::RecordsSearch { .. }
-        | Response::RecordsFetchContent { .. }
-        | Response::TasksApplyEvent { .. }
-        | Response::TasksDepsBatch { .. }
-        | Response::TasksLabelsBatch { .. }
-        | Response::TasksLabelsSummary { .. }
-        | Response::MemoryWalkThread { .. }
-        | Response::TagsRecluster { .. }
-        | Response::BrainsList { .. }
-        | Response::WatchAdded { .. }
-        | Response::WatchRemoved { .. }
-        | Response::WatchList { .. } => {
-            Ok(
-                serde_json::to_value(response).map_err(|_| RpcError::Unknown {
-                    message: "failed to serialize response".into(),
-                })?,
-            )
-        }
-    }
+    serde_json::to_value(&response).map_err(|_| RpcError::Unknown {
+        message: "failed to serialize response".into(),
+    })
 }
 
 /// Build the appropriate `Request` from IPC tool name + params.
@@ -608,7 +531,15 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                 .unwrap_or(false),
         },
         // ── records ───────────────────────────────────────────────────
-        "records.list" => Request::RecordsArchive {
+        "records.list" => Request::ArtifactsList {
+            params: brain_rpc::ArtifactsListParams {
+                kind: params.get("kind").and_then(|v| v.as_str().map(String::from)),
+                tag: params.get("tag").and_then(|v| v.as_str().map(String::from)),
+                status: params.get("status").and_then(|v| v.as_str().map(String::from)),
+                limit: params.get("limit").and_then(|v| v.as_u64().map(|n| n as u32)),
+            },
+        },
+        "records.archive" => Request::RecordsArchive {
             params: brain_rpc::RecordsArchiveParams {
                 record_id: params
                     .get("record_id")
