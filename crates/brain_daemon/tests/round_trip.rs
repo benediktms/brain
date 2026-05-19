@@ -1,69 +1,84 @@
-//! End-to-end integration test: spin up `UnixSocketServer` with the
-//! production `DefaultDispatcher`, connect a real `brain_rpc`
-//! `DaemonClient` over a `UnixSocketTransport`, round-trip
-//! `Ping`/`Pong` and `Handshake`/`HandshakeOk`, then signal clean
-//! shutdown.
+//! End-to-end integration tests for `UnixSocketServer` with both the
+//! lightweight `DefaultDispatcher` (Ping + Handshake) and the production
+//! `BrainStoresDispatcher` backed by real temp-store paths.
 //!
-//! This is the hexagonal payoff: the same `DaemonClient` that flows
-//! over `InMemoryTransport` in `brain_rpc`'s own tests also drives
-//! the production server here, byte-identical. If the wire format
-//! ever drifts between the two sides, this test fails.
+//! The wire format (`DaemonClient` ↔ `UnixSocketTransport` ↔
+//! `UnixSocketServer`) is identical for both dispatcher types — if it
+//! works for one it works for both. The `BrainStoresDispatcher` tests
+//! here focus on the initialization path (stores + dispatcher + server)
+//! and the `TasksList` response shape, which are the gaps that
+//! subprocess-spawn tests used to cover.
 
 #![cfg(unix)]
 
-use std::thread;
-use std::time::Duration;
+mod common;
 
-use brain_daemon::{DaemonConfig, DefaultDispatcher, UnixSocketServer};
-use brain_rpc::{DaemonClient, PROTOCOL_VERSION, Request, Response, UnixSocketTransport};
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
+use brain_lib::stores::BrainStores;
+use brain_rpc::{DaemonClient, Request, Response, RpcError, TasksListParams, UnixSocketTransport};
 use tempfile::TempDir;
 
-/// Spawn the server on a fresh temp-dir socket and return the path
-/// plus a shutdown signaller and join handle. The caller signals
-/// shutdown and joins the thread to clean up.
-fn spawn_server() -> (TempDir, std::path::PathBuf, ServerGuard) {
+/// Process-wide lock serializing BRAIN_HOME mutations across concurrent tests.
+///
+/// cargo-nextest isolates test binaries into separate processes, but within a
+/// single binary the multi-threaded tokio runtime runs tests concurrently.
+static BRAIN_HOME_LOCK: Mutex<()> = Mutex::new(());
+
+/// Wait for Unix socket to become ready by polling connection attempts.
+///
+/// Retries with exponential backoff up to `timeout`. Returns `Ok(())` on
+/// success or `Err` with a diagnostic message if the timeout elapses.
+fn wait_for_socket_ready(sock_path: &std::path::Path, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut backoff_ms = 5;
+
+    loop {
+        match UnixStream::connect(sock_path) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                if Instant::now() >= deadline {
+                    return Err(anyhow::anyhow!(
+                        "server socket {} not ready within {:?}",
+                        sock_path.display(),
+                        timeout
+                    ));
+                }
+                thread::sleep(Duration::from_millis(backoff_ms));
+                backoff_ms = (backoff_ms * 2).min(20);
+            }
+        }
+    }
+}
+/// Spawn the server on a fresh temp-dir socket with `DefaultDispatcher`.
+fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
     let tmp = TempDir::new().expect("tempdir");
     let sock_path = tmp.path().join("brain.sock");
     let config = DaemonConfig::new(&sock_path);
-    let server = UnixSocketServer::bind(&config, DefaultDispatcher).expect("bind UnixSocketServer");
+    let server = UnixSocketServer::bind(&config, DefaultDispatcher).expect("bind");
     let shutdown = server.shutdown_handle();
     let handle = thread::spawn(move || server.run());
-    // Tiny pause so the accept loop is definitely running before the
-    // client tries to connect. The non-blocking listener accepts
-    // immediately, but the thread might not have been scheduled yet.
-    thread::sleep(Duration::from_millis(20));
+    wait_for_socket_ready(&sock_path, Duration::from_millis(200))
+        .expect("server socket not ready within 200ms");
     (
         tmp,
         sock_path,
-        ServerGuard {
+        common::ServerGuard {
             shutdown: Some(shutdown),
             handle: Some(handle),
+            brain_home_lock: None,
+            brain_home_guard: None,
         },
     )
 }
 
-struct ServerGuard {
-    shutdown: Option<brain_daemon::ShutdownHandle>,
-    handle: Option<thread::JoinHandle<Result<(), brain_rpc::RpcError>>>,
-}
-
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        if let Some(s) = self.shutdown.take() {
-            s.request();
-        }
-        if let Some(h) = self.handle.take() {
-            // 200ms is generous — the accept loop polls every 50ms.
-            // We don't fail the test on a slow join because the test
-            // body's assertions are what matters; this is just cleanup.
-            let _ = h.join();
-        }
-    }
-}
-
 #[test]
 fn ping_pong_over_real_server() {
-    let (_tmp, sock_path, _guard) = spawn_server();
+    let (_tmp, sock_path, _guard) = spawn_default_server();
 
     let transport = UnixSocketTransport::connect(&sock_path).expect("connect transport");
     let mut client = DaemonClient::connect(transport).expect("connect client (handshake)");
@@ -74,24 +89,15 @@ fn ping_pong_over_real_server() {
 
 #[test]
 fn handshake_negotiates_protocol_version() {
-    // DaemonClient::connect performs the handshake; if the server's
-    // protocol version diverged from the client's, this would return
-    // VersionMismatch. Both sides being on PROTOCOL_VERSION makes
-    // connect succeed — and "succeeded" is the assertion.
-    let (_tmp, sock_path, _guard) = spawn_server();
+    let (_tmp, sock_path, _guard) = spawn_default_server();
 
     let transport = UnixSocketTransport::connect(&sock_path).expect("connect transport");
     let _client = DaemonClient::connect(transport).expect("connect client");
-
-    // Explicit cross-check: PROTOCOL_VERSION matched on both sides.
-    // (No public API exposes the negotiated version after connect;
-    // the type-level guarantee that connect returned Ok IS the proof.)
-    assert_eq!(PROTOCOL_VERSION, 1);
 }
 
 #[test]
 fn multiple_requests_on_one_connection() {
-    let (_tmp, sock_path, _guard) = spawn_server();
+    let (_tmp, sock_path, _guard) = spawn_default_server();
 
     let transport = UnixSocketTransport::connect(&sock_path).expect("connect transport");
     let mut client = DaemonClient::connect(transport).expect("connect client");
@@ -110,14 +116,131 @@ fn shutdown_handle_stops_run_loop() {
     let shutdown = server.shutdown_handle();
 
     let handle = thread::spawn(move || server.run());
-
-    // Let the accept loop tick once.
     thread::sleep(Duration::from_millis(80));
 
     shutdown.request();
 
-    // The loop polls every 50 ms; 500 ms is more than enough.
     let join = handle.join();
     assert!(join.is_ok(), "server thread should join cleanly");
     assert!(join.unwrap().is_ok(), "server.run() should return Ok");
+}
+
+/// Spawn a server backed by `BrainStoresDispatcher` with real temp stores.
+/// Creates its own `TempDir` (socket dir + BRAIN_HOME child) and returns it
+/// alongside the socket path so the caller can keep it alive for the
+/// server's lifetime — `guard` (the BRAIN_HOME child) is moved into the
+/// server thread and lives as long as the thread does.
+fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
+    let tmp = TempDir::new().expect("tempdir");
+    let sqlite_path = tmp.path().join("brain.db");
+    let lance_path = tmp.path().join("lance");
+    let sock_path = tmp.path().join("brain.sock");
+
+    // Isolate BrainStores from the developer's real ~/.brain/ by setting
+    // BRAIN_HOME to the temp dir. BrainStores resolves its unified DB
+    // via brain_home(), so this ensures we get a fresh isolated store.
+    let guard = tempfile::Builder::new()
+        .prefix(".brain_home_")
+        .tempdir_in(tmp.path())
+        .expect("BRAIN_HOME tempdir");
+    // Lock serializes BRAIN_HOME mutations across concurrent tokio threads.
+    // Keep BRAIN_HOME set for the ENTIRE server lifetime — brain_home()
+    // is called at dispatch time, not just at startup. The lock and env
+    // var stay in place until after ServerGuard::drop (i.e., after the
+    // server thread has been shut down and joined), so no handler ever
+    // sees the real developer's ~/.brain/.
+    let _lock = BRAIN_HOME_LOCK.lock().unwrap();
+    unsafe { std::env::set_var("BRAIN_HOME", guard.path()) };
+    let stores = match BrainStores::from_path(&sqlite_path, Some(&lance_path)) {
+        Ok(s) => s,
+        Err(e) => {
+            unsafe { std::env::remove_var("BRAIN_HOME") };
+            drop(_lock);
+            panic!("open BrainStores from temp paths: {e}");
+        }
+    };
+
+    #[cfg(not(feature = "embed"))]
+    let dispatcher = BrainStoresDispatcher::new(stores);
+    #[cfg(feature = "embed")]
+    let dispatcher = BrainStoresDispatcher::new(stores, None);
+
+    let config = DaemonConfig::new(&sock_path);
+    let server = UnixSocketServer::bind(&config, dispatcher).expect("bind");
+    let shutdown = server.shutdown_handle();
+    // Arc so both the thread and ServerGuard can own the TempDir. The Arc
+    // stays in this function and goes into ServerGuard; a clone goes to the
+    // thread. _lock stays here (MutexGuard is not Send).
+    let guard_arc = Arc::new(guard);
+    let handle = thread::spawn({
+        let guard_arc = guard_arc.clone();
+        move || {
+            let _guard = guard_arc;
+            server.run()
+        }
+    });
+    // Poll the socket for readiness. BrainStores init can take longer than
+    // DefaultDispatcher, so allow up to 500ms (matching brain_mcp's spawn_daemon
+    // previous grace period, but now actively probing instead of fixed sleep).
+    wait_for_socket_ready(&sock_path, Duration::from_millis(500))
+        .expect("server socket not ready within 500ms");
+
+    (
+        tmp,
+        sock_path,
+        common::ServerGuard {
+            shutdown: Some(shutdown),
+            handle: Some(handle),
+            brain_home_lock: Some(_lock),
+            brain_home_guard: Some(guard_arc),
+        },
+    )
+}
+#[test]
+fn tasks_list_empty_db_via_real_stores() {
+    let (_tmp, sock_path, _guard) = spawn_brain_stores_server();
+
+    let transport = UnixSocketTransport::connect(&sock_path).expect("connect");
+    let mut client = DaemonClient::connect(transport).expect("handshake");
+
+    let resp = client
+        .call(Request::TasksList {
+            params: TasksListParams::default(),
+        })
+        .expect("TasksList call");
+
+    match resp {
+        Response::TasksList { tasks } => {
+            assert!(
+                tasks.is_empty(),
+                "expected empty task list against empty DB, got {} tasks",
+                tasks.len()
+            );
+        }
+        other => panic!("expected Response::TasksList, got {other:?}"),
+    }
+}
+
+#[test]
+fn tasks_list_rejects_unknown_status_filter_via_real_stores() {
+    let (_tmp, sock_path, _guard) = spawn_brain_stores_server();
+
+    let transport = UnixSocketTransport::connect(&sock_path).expect("connect");
+    let mut client = DaemonClient::connect(transport).expect("handshake");
+
+    let result = client.call(Request::TasksList {
+        params: TasksListParams {
+            status: Some("bogus".into()),
+            ..TasksListParams::default()
+        },
+    });
+
+    // BrainStoresDispatcher returns RpcError::Protocol for unknown status.
+    // Note: the server sends RpcError as JSON, but the Transport::call client
+    // deserializes as Response, so the actual RpcError::Protocol wraps a
+    // deserialization error — the outer error variant is still Protocol.
+    match result {
+        Err(RpcError::Protocol { .. }) => {}
+        other => panic!("expected Protocol error for bogus status filter, got {other:?}"),
+    }
 }

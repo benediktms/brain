@@ -1,0 +1,63 @@
+[package]
+name = "brain-mcp"
+version.workspace = true
+edition.workspace = true
+
+# Architectural ratchet: brain_mcp is the MCP-protocol-facing crate that
+# emerged from saga-5df's final extraction step. The acceptance gate is
+# that brain_mcp owns ZERO direct rusqlite / lance / candle / brain_<domain>
+# dependencies — it is a thin client of brain_rpc::DaemonClient.
+#
+# Tool bodies in this crate parse params, issue a `DaemonClient.<typed>(...)`
+# call, and shape the JSON envelope. All storage and search work happens
+# behind the wire in `brain_daemon`. Adding rusqlite or any brain_<domain>
+# dep here is the anti-pattern the architecture test gates against.
+
+# cargo-dist opt-out: the production `brain-mcp` binary ships from the
+# `brain` cli crate via a forwarder (see crates/cli/Cargo.toml). One
+# Homebrew formula, three binaries (brain, brain-daemon, brain-mcp),
+# guaranteed-coherent versions. Mirrors the brain-daemon arrangement.
+[package.metadata.dist]
+dist = false
+
+[features]
+# `embed` mirrors brain-daemon's `embed` feature so the integration
+# tests in `crates/brain_mcp/tests/` can cfg-gate the
+# `BrainStoresDispatcher::new` call site — the constructor takes a
+# second `Option<Arc<WatcherHandle>>` arg only under
+# `brain-daemon/embed`. Default-on so `cargo check --workspace --tests`
+# matches the `cli`-driven workspace default (cli's default activates
+# `brain-daemon/embed` already via feature unification). The
+# `--no-default-features` CI job deactivates both in lockstep.
+default = ["embed"]
+embed = ["brain-daemon/embed"]
+
+[[bin]]
+name = "brain-mcp"
+path = "src/main.rs"
+
+[dependencies]
+brain-rpc = { path = "../brain_rpc" }
+brain-core = { path = "../brain_core" }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "macros", "sync"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Integration tests spawn a real `brain-daemon` over a temp-dir Unix
+# socket and drive it through the same `brain_mcp::McpContext` that
+# the production stdio loop uses. The dev-dep on `brain-daemon`
+# applies only to `crates/brain_mcp/tests/` — the architectural
+# ratchet (no daemon deps in `src/`) is unaffected.
+brain-daemon = { path = "../brain_daemon" }
+# `brain-lib` is needed by `tools_smoke` to construct a real
+# `BrainStores::in_memory()` for the `BrainStoresDispatcher` — the
+# `DefaultDispatcher` only handles ping/handshake and cannot serve
+# storage-backed tool calls.
+brain-lib = { path = "../brain_lib" }
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "macros", "sync", "rt-multi-thread"] }

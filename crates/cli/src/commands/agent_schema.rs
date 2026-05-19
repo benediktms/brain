@@ -1,5 +1,5 @@
 use anyhow::Result;
-use brain_lib::mcp::tools::ToolRegistry;
+use brain_mcp::tools::ToolRegistry;
 
 /// Output the JSON schema for all MCP tool definitions.
 pub fn run(tool: Option<String>, pretty: bool) -> Result<()> {

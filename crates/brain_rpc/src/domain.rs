@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// A client-originated message sent over the wire.
 ///
@@ -199,8 +199,10 @@ pub enum Request {
 
     // ── jobs ────────────────────────────────────────────────────────────
     /// Show job queue health summary. Server returns
-    /// [`Response::JobsStatus`].
-    JobsStatus,
+    /// [`Response::JobsStatus`]. `params` carries server-side filters
+    /// (kind / status / limit) so the daemon — not the MCP tool — owns
+    /// the filtering loop.
+    JobsStatus { params: JobsStatusParams },
 
     // ── status ──────────────────────────────────────────────────────────
     /// Show brain health status. Server returns [`Response::BrainStatus`].
@@ -249,6 +251,14 @@ pub enum Request {
     /// Remove a tag from a record. Server returns
     /// [`Response::RecordsTagRemove`].
     RecordsTagRemove { record_id: String, tag: String },
+
+    // ── records (read: search + content) ────────────────────────────────
+    /// Run a hybrid semantic + FTS search filtered to record-kind
+    /// results. Server returns [`Response::RecordsSearch`].
+    RecordsSearch { params: RecordsSearchParams },
+    /// Fetch the raw content (text or base64-encoded bytes) for a
+    /// record. Server returns [`Response::RecordsFetchContent`].
+    RecordsFetchContent { params: RecordsFetchContentParams },
 
     // ── tasks (batch + opaque event) ────────────────────────────────────
     /// Apply a raw task event (the MCP `tasks.apply_event` surface).
@@ -475,7 +485,12 @@ pub enum SagaDescriptionUpdate {
 }
 
 /// A server-originated reply to a [`Request`].
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+// `Eq` is intentionally NOT derived: [`Response::RecordsSearch`] carries
+// per-hit `f64` scores via [`WireRecordHit`], and `f64` is not `Eq`
+// (NaN ≠ NaN). `PartialEq` suffices for round-trip tests and is what
+// every consumer in this workspace actually uses — no `HashMap<Response>`
+// or `HashSet<Response>` exists anywhere.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// Reply to [`Request::Handshake`] carrying the server's protocol version.
@@ -678,6 +693,14 @@ pub enum Response {
     RecordsLinkAdd { created: bool },
     /// Reply to [`Request::RecordsLinkRemove`].
     RecordsLinkRemove { removed: bool },
+    /// Reply to [`Request::RecordsSearch`]. The report mirrors the legacy
+    /// `records.search` JSON envelope byte-for-byte (modulo serde
+    /// rename: `summary_2sent` → `summary`).
+    RecordsSearch { report: RecordsSearchReport },
+    /// Reply to [`Request::RecordsFetchContent`]. Exactly one of
+    /// [`RecordContent::text`] / [`RecordContent::data_base64`] is
+    /// populated, per the `encoding` discriminator.
+    RecordsFetchContent { content: RecordContent },
     /// Reply to [`Request::RecordsTagAdd`].
     RecordsTagAdd { tag: String },
     /// Reply to [`Request::RecordsTagRemove`].
@@ -829,6 +852,27 @@ pub struct SnapshotSummary {
     pub brain_id: String,
 }
 
+/// Wire-format summary of a brain referenced by a saga.
+///
+/// Mirrors `brain_sagas::BrainSummary` field-for-field.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaBrainSummary {
+    pub brain_id: String,
+    pub name: String,
+    pub prefix: Option<String>,
+}
+
+/// Wire-format member task stub for [`SagaSummary::members`].
+/// Mirrors `brain_sagas::SagaMember` field-for-field.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaMember {
+    pub task_id: String,
+    pub brain_id: String,
+    pub title: String,
+    pub status: String,
+    pub task_type: String,
+}
+
 /// Wire-format summary of a saga.
 ///
 /// Mirrors but does not re-use `brain_sagas::Saga` — see module
@@ -852,16 +896,12 @@ pub struct SagaSummary {
     /// RFC 3339 / ISO 8601 timestamp, or `None` when the saga has
     /// never been closed/cancelled (or was subsequently reopened).
     pub closed_at: Option<String>,
-}
-
-/// Wire-format summary of a brain referenced by a saga.
-///
-/// Mirrors `brain_sagas::BrainSummary` field-for-field.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct SagaBrainSummary {
-    pub brain_id: String,
-    pub name: String,
-    pub prefix: Option<String>,
+    /// Current member task stubs (task_id, brain_id, title, status, task_type)
+    /// in `added_at` order. Empty for planning/closed/cancelled sagas.
+    pub members: Vec<SagaMember>,
+    /// Brains that have at least one live member task in this saga.
+    /// Empty for planning/closed/cancelled sagas.
+    pub brains: Vec<SagaBrainSummary>,
 }
 
 /// Wire-format member of [`Response::SagasFrontier`] — one ready
@@ -956,6 +996,14 @@ pub struct MemoryWriteEpisodeParams {
     /// Importance scaled to 0–1000 (millis). Divide by 1000.0 to recover
     /// the original float.
     pub importance_millis: u32,
+    /// Optional `summary_id` of a prior episode this one continues.
+    /// Daemon validates predecessor existence pre-write and rejects
+    /// the write if the predecessor cannot be resolved — preserves
+    /// the legacy MCP semantics that a missing predecessor aborts
+    /// the episode write rather than persisting the episode then
+    /// reporting a broken link.
+    #[serde(default)]
+    pub continues: Option<String>,
 }
 
 /// Wire-format params for [`Request::MemoryWriteProcedure`].
@@ -999,6 +1047,10 @@ pub struct MemoryConsolidateParams {
     pub limit: usize,
     pub gap_seconds: i64,
     pub auto_summarize: bool,
+    /// Optionally scope consolidation to a specific brain. Defaults to the
+    /// daemon's own brain when `None`.
+    #[serde(default)]
+    pub brain_id: Option<String>,
 }
 
 /// Wire-format params for [`Request::MemorySummarizeScope`].
@@ -1083,6 +1135,14 @@ pub struct JobsStatusReport {
     pub ready: u64,
     pub done: u64,
     pub failed: u64,
+    /// Resolved listing-status used when populating `recent_failures`.
+    /// Always the canonical lowercase form (`pending` / `ready` /
+    /// `in_progress` / `done` / `failed`) — the daemon parses the
+    /// caller's filter through [`brain_persistence::db::job::JobStatus`]
+    /// and echoes the canonical name so MCP/CLI clients can render
+    /// `filters.status` without reproducing the parser. Defaults to
+    /// `"failed"` when the caller omits the filter.
+    pub listing_status: String,
     /// Up to 10 most recently failed jobs.
     pub recent_failures: Vec<JobSummary>,
     /// Jobs that appear stuck (InProgress beyond timeout).
@@ -1090,6 +1150,14 @@ pub struct JobsStatusReport {
 }
 
 /// Wire summary of a single job row.
+///
+/// `status` is the lowercase string form of [`brain_persistence::db::job::JobStatus`]
+/// (`pending` / `ready` / `in_progress` / `done` / `failed`); the daemon
+/// converts via `as_ref()` at the wire boundary.
+///
+/// `started_at` is an RFC 3339 / ISO 8601 string (never a raw epoch
+/// integer) and is `None` when the job has not yet been picked up by a
+/// worker.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct JobSummary {
     pub job_id: String,
@@ -1097,12 +1165,92 @@ pub struct JobSummary {
     pub ref_id: String,
     pub attempts: u32,
     pub last_error: Option<String>,
+    pub status: String,
+    pub started_at: Option<String>,
     pub updated_at: String,
+}
+
+/// Filter parameters for [`Request::JobsStatus`].
+///
+/// All three fields are server-side filters: the daemon owns the
+/// `list_jobs_by_status` + post-fetch `kind` retain loop so MCP and
+/// CLI clients become thin wire-echo bodies. `limit` defaults to 10
+/// when constructed via [`JobsStatusParams::default`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobsStatusParams {
+    /// Filter recent-failures + stuck-jobs lists to a single job kind
+    /// (e.g. `"summarize_scope"`). `None` keeps both lists unfiltered.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Job status whose list of recent rows is returned (lowercase form
+    /// of [`brain_persistence::db::job::JobStatus`]). When `None` the
+    /// daemon defaults to `failed` — preserving the legacy MCP default.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Cap on the number of recent rows returned. Defaults to 10 when
+    /// the wire omits the field.
+    #[serde(default = "jobs_status_default_limit")]
+    pub limit: u64,
+}
+
+fn jobs_status_default_limit() -> u64 {
+    10
+}
+
+impl Default for JobsStatusParams {
+    fn default() -> Self {
+        Self {
+            kind: None,
+            status: None,
+            limit: 10,
+        }
+    }
 }
 
 // ── status wire types ─────────────────────────────────────────────────────────
 
+/// Latency histogram snapshot returned inside [`MetricsSnapshot`].
+///
+/// Field names are byte-stable with the legacy `status` MCP envelope
+/// (`p50_us` / `p95_us` / `total_samples`) — clients depend on this
+/// shape.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct LatencyHistogram {
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub total_samples: u64,
+}
+
+/// Runtime metrics snapshot carried inside [`BrainStatusReport`].
+///
+/// Mirrors but does NOT re-use `brain_core::metrics::MetricsSnapshot`
+/// — see module rustdoc for the anti-corruption-layer rationale. The
+/// daemon maps internal → wire field-by-field at the dispatcher
+/// boundary so a future field on the internal snapshot doesn't
+/// silently appear on the wire.
+///
+/// `dual_store_stuck_files` and `stale_hashes_prevented` are NOT
+/// carried here; they already live on [`BrainStatusReport`] (since
+/// they predate the metrics extension) and the MCP `status` tool
+/// reads them off the report directly to assemble the legacy envelope.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct MetricsSnapshot {
+    pub uptime_seconds: u64,
+    pub indexing_latency: LatencyHistogram,
+    pub query_latency: LatencyHistogram,
+    pub queue_depth: u64,
+    pub lancedb_unoptimized_rows: u64,
+    pub lancedb_optimize_failures: u64,
+    pub indexing_errors: u64,
+    pub query_errors: u64,
+}
+
 /// Brain health status returned by [`Response::BrainStatus`].
+///
+/// `metrics` was added when the legacy `status` MCP tool moved into
+/// `brain_mcp`; the field is populated unconditionally because the
+/// snapshot is cheap (8 atomic loads + 2 percentile sweeps). Older
+/// CLI consumers that destructure named fields ignore it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BrainStatusReport {
     pub brain_name: String,
@@ -1113,6 +1261,7 @@ pub struct BrainStatusReport {
     pub tasks_done: u64,
     pub stuck_files: u64,
     pub stale_hashes_prevented: u64,
+    pub metrics: MetricsSnapshot,
 }
 
 // ── provider wire types ───────────────────────────────────────────────────────
@@ -1204,8 +1353,12 @@ pub struct WireLinkSummary {
     pub from: WireEntityRef,
     pub to: WireEntityRef,
     pub edge_kind: String,
-    /// RFC 3339 UTC timestamp.
-    pub created_at: String,
+    /// RFC 3339 UTC timestamp. `None` when the underlying read API
+    /// doesn't surface a timestamp for this edge — preferred over
+    /// emitting an empty-string `created_at` that would violate the
+    /// RFC 3339 contract per `feedback_iso_timestamps_on_wire`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// Wire-format brain summary returned from [`Response::BrainsList`].
@@ -1275,6 +1428,326 @@ pub struct RecordsLinkParams {
     pub link_kind: String,
 }
 
+/// Wire-format params for [`Request::RecordsSearch`]. Defaults match
+/// the legacy MCP tool (`k = 10`, `budget_tokens = 800`, no tag /
+/// brain filter).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordsSearchParams {
+    pub query: String,
+    #[serde(default = "records_search_default_k")]
+    pub k: u64,
+    #[serde(default = "records_search_default_budget_tokens")]
+    pub budget_tokens: u64,
+    /// Tag filter applied to the hybrid retrieval pipeline. AND across
+    /// all entries (case-insensitive). Empty = no filter.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Brain scope. Empty = current brain only. `["all"]` expands to
+    /// every registered brain in the federation; named entries are
+    /// matched by brain name or id.
+    #[serde(default)]
+    pub brains: Vec<String>,
+}
+
+fn records_search_default_k() -> u64 {
+    10
+}
+
+fn records_search_default_budget_tokens() -> u64 {
+    800
+}
+
+impl Default for RecordsSearchParams {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            k: 10,
+            budget_tokens: 800,
+            tags: Vec::new(),
+            brains: Vec::new(),
+        }
+    }
+}
+
+/// A single ranked record hit on the wire.
+///
+/// `score` is the hybrid retrieval score from `brain_retrieval`. It is
+/// `f64` (not `u64`) for byte-shape parity with the legacy MCP envelope,
+/// which is the only reason [`Response`] now derives `PartialEq` and not
+/// `Eq` — `f64` cannot be `Eq` (NaN).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct WireRecordHit {
+    pub record_id: String,
+    pub memory_id: String,
+    pub title: String,
+    pub summary: String,
+    pub score: f64,
+    pub kind: String,
+    pub uri: String,
+    /// Federated-search attribution. `None` for single-brain queries —
+    /// callers can fall back to the current brain name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brain_name: Option<String>,
+}
+
+/// Records-search report returned by [`Response::RecordsSearch`].
+///
+/// Mirrors the legacy `records.search` JSON envelope:
+/// `{budget_tokens, used_tokens_est, result_count, total_available, results}`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RecordsSearchReport {
+    pub budget_tokens: u64,
+    pub used_tokens_est: u64,
+    pub result_count: u64,
+    pub total_available: u64,
+    pub results: Vec<WireRecordHit>,
+}
+
+/// Wire-format params for [`Request::RecordsFetchContent`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordsFetchContentParams {
+    pub record_id: String,
+    /// Optional target brain (name or id). When `None`, fetches from
+    /// the current brain.
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
+/// Wire-format record content returned by
+/// [`Response::RecordsFetchContent`].
+///
+/// `encoding` is one of `"utf-8"` or `"base64"`. Exactly one of
+/// [`RecordContent::text`] (utf-8 case) / [`RecordContent::data_base64`]
+/// (binary case) is populated — the daemon decodes text-like
+/// `media_type` values up-front so clients do not duplicate the
+/// detection rule.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordContent {
+    pub record_id: String,
+    pub title: String,
+    pub kind: String,
+    pub content_hash: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    pub encoding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Base64-encoded raw bytes (set when `encoding == "base64"`).
+    /// Renamed to `"data"` on the wire to preserve byte-shape parity
+    /// with the legacy `records.fetch_content` MCP envelope.
+    #[serde(default, rename = "data", skip_serializing_if = "Option::is_none")]
+    pub data_base64: Option<String>,
+    pub uri: String,
+    /// Echoes the resolved remote-brain name when the request carried a
+    /// non-`None` `brain`; `None` for local fetches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brain: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for RecordContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            RecordId,
+            Title,
+            Kind,
+            ContentHash,
+            Size,
+            MediaType,
+            Encoding,
+            Text,
+            #[serde(rename = "data")]
+            Data,
+            Uri,
+            Brain,
+        }
+
+        struct RecordContentVisitor;
+
+        impl<'de> Visitor<'de> for RecordContentVisitor {
+            type Value = RecordContent;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct RecordContent")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<RecordContent, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut record_id = None;
+                let mut title = None;
+                let mut kind = None;
+                let mut content_hash = None;
+                let mut size = None;
+                let mut media_type = None;
+                let mut encoding = None;
+                let mut text = None;
+                let mut data_base64 = None;
+                let mut uri = None;
+                let mut brain = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::RecordId => {
+                            if record_id.is_some() {
+                                return Err(de::Error::duplicate_field("record_id"));
+                            }
+                            record_id = Some(map.next_value()?);
+                        }
+                        Field::Title => {
+                            if title.is_some() {
+                                return Err(de::Error::duplicate_field("title"));
+                            }
+                            title = Some(map.next_value()?);
+                        }
+                        Field::Kind => {
+                            if kind.is_some() {
+                                return Err(de::Error::duplicate_field("kind"));
+                            }
+                            kind = Some(map.next_value()?);
+                        }
+                        Field::ContentHash => {
+                            if content_hash.is_some() {
+                                return Err(de::Error::duplicate_field("content_hash"));
+                            }
+                            content_hash = Some(map.next_value()?);
+                        }
+                        Field::Size => {
+                            if size.is_some() {
+                                return Err(de::Error::duplicate_field("size"));
+                            }
+                            size = Some(map.next_value()?);
+                        }
+                        Field::MediaType => {
+                            if media_type.is_some() {
+                                return Err(de::Error::duplicate_field("media_type"));
+                            }
+                            media_type = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Encoding => {
+                            if encoding.is_some() {
+                                return Err(de::Error::duplicate_field("encoding"));
+                            }
+                            encoding = Some(map.next_value::<String>()?);
+                        }
+                        Field::Text => {
+                            if text.is_some() {
+                                return Err(de::Error::duplicate_field("text"));
+                            }
+                            text = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Data => {
+                            if data_base64.is_some() {
+                                return Err(de::Error::duplicate_field("data"));
+                            }
+                            data_base64 = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Uri => {
+                            if uri.is_some() {
+                                return Err(de::Error::duplicate_field("uri"));
+                            }
+                            uri = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Brain => {
+                            if brain.is_some() {
+                                return Err(de::Error::duplicate_field("brain"));
+                            }
+                            brain = map.next_value::<Option<String>>()?;
+                        }
+                    }
+                }
+
+                let record_id = record_id.ok_or_else(|| de::Error::missing_field("record_id"))?;
+                let title = title.ok_or_else(|| de::Error::missing_field("title"))?;
+                let kind = kind.ok_or_else(|| de::Error::missing_field("kind"))?;
+                let content_hash =
+                    content_hash.ok_or_else(|| de::Error::missing_field("content_hash"))?;
+                let size = size.ok_or_else(|| de::Error::missing_field("size"))?;
+                let encoding = encoding.ok_or_else(|| de::Error::missing_field("encoding"))?;
+                let uri = uri.ok_or_else(|| de::Error::missing_field("uri"))?;
+
+                // Enforce XOR invariant: exactly one of text or data_base64 must be Some
+                // and must match the declared encoding
+                match (encoding.as_str(), &text, &data_base64) {
+                    ("utf-8", None, _) => {
+                        return Err(de::Error::custom(
+                            "encoding 'utf-8' requires 'text' payload",
+                        ));
+                    }
+                    ("utf-8", Some(_), Some(_)) => {
+                        return Err(de::Error::custom(
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)",
+                        ));
+                    }
+                    ("base64", _, None) => {
+                        return Err(de::Error::custom(
+                            "encoding 'base64' requires 'data' payload",
+                        ));
+                    }
+                    ("base64", Some(_), Some(_)) => {
+                        return Err(de::Error::custom(
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)",
+                        ));
+                    }
+                    ("utf-8", Some(_), None) | ("base64", None, Some(_)) => {
+                        // Valid combinations
+                    }
+                    (enc, None, None) => {
+                        return Err(de::Error::custom(format!(
+                            "RecordContent with encoding '{}' must have exactly one of 'text' or 'data' (neither provided)",
+                            enc
+                        )));
+                    }
+                    (enc, _, _) => {
+                        return Err(de::Error::custom(format!(
+                            "unknown encoding '{}' (expected 'utf-8' or 'base64')",
+                            enc
+                        )));
+                    }
+                }
+
+                Ok(RecordContent {
+                    record_id,
+                    title,
+                    kind,
+                    content_hash,
+                    size,
+                    media_type,
+                    encoding,
+                    text,
+                    data_base64,
+                    uri,
+                    brain,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &[
+            "record_id",
+            "title",
+            "kind",
+            "content_hash",
+            "size",
+            "media_type",
+            "encoding",
+            "text",
+            "data",
+            "uri",
+            "brain",
+        ];
+        deserializer.deserialize_struct("RecordContent", FIELDS, RecordContentVisitor)
+    }
+}
+
 /// Wire-format params for [`Request::TasksApplyEvent`]. The body is
 /// kept opaque (`serde_json::Value`) so the multi-variant event-type
 /// union on the MCP surface does not need to be mirrored in the wire
@@ -1333,8 +1806,14 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_one() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+    fn protocol_version_is_four() {
+        // Bumped 3 → 4 when Request::RecordsSearch +
+        // Request::RecordsFetchContent (and their Response twins) were
+        // added so the daemon answers records.search +
+        // records.fetch_content MCP tools directly. The handshake
+        // check rejects rolling restarts that pair a pre-bump client
+        // with a post-bump daemon.
+        assert_eq!(PROTOCOL_VERSION, 4);
     }
 
     #[test]
@@ -2454,6 +2933,8 @@ mod tests {
             created_at: "2026-05-17T00:00:00Z".into(),
             updated_at: "2026-05-17T00:00:00Z".into(),
             closed_at: None,
+            members: vec![],
+            brains: vec![],
         }
     }
 
@@ -2507,7 +2988,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(
             json,
-            r#"{"saga_id":"saga-deadbeef","title":"Q4 migration","description":"desc","status":"open","created_at":"2026-05-17T00:00:00Z","updated_at":"2026-05-17T00:00:00Z","closed_at":null}"#
+            r#"{"saga_id":"saga-deadbeef","title":"Q4 migration","description":"desc","status":"open","created_at":"2026-05-17T00:00:00Z","updated_at":"2026-05-17T00:00:00Z","closed_at":null,"members":[],"brains":[]}"#
         );
     }
 
@@ -3048,5 +3529,390 @@ mod tests {
             watches: vec![sample_watch_summary()],
         };
         assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── status / jobs extension round-trip tests ───────────────────
+
+    fn sample_latency_histogram() -> LatencyHistogram {
+        LatencyHistogram {
+            p50_us: 1_500,
+            p95_us: 9_800,
+            total_samples: 42,
+        }
+    }
+
+    fn sample_metrics_snapshot() -> MetricsSnapshot {
+        MetricsSnapshot {
+            uptime_seconds: 3_600,
+            indexing_latency: sample_latency_histogram(),
+            query_latency: LatencyHistogram {
+                p50_us: 200,
+                p95_us: 1_100,
+                total_samples: 17,
+            },
+            queue_depth: 3,
+            lancedb_unoptimized_rows: 12_000,
+            lancedb_optimize_failures: 1,
+            indexing_errors: 0,
+            query_errors: 2,
+        }
+    }
+
+    #[test]
+    fn latency_histogram_roundtrips() {
+        let h = sample_latency_histogram();
+        assert_eq!(roundtrip(&h), h);
+    }
+
+    #[test]
+    fn metrics_snapshot_roundtrips() {
+        let m = sample_metrics_snapshot();
+        assert_eq!(roundtrip(&m), m);
+    }
+
+    #[test]
+    fn metrics_snapshot_field_names_are_stable() {
+        // Byte-shape contract with legacy `status` MCP envelope.
+        let m = sample_metrics_snapshot();
+        let json = serde_json::to_value(&m).unwrap();
+        assert!(json.get("uptime_seconds").is_some());
+        assert!(json.get("indexing_latency").is_some());
+        assert!(json.get("query_latency").is_some());
+        assert!(json.get("queue_depth").is_some());
+        assert!(json.get("lancedb_unoptimized_rows").is_some());
+        assert!(json.get("lancedb_optimize_failures").is_some());
+        assert!(json.get("indexing_errors").is_some());
+        assert!(json.get("query_errors").is_some());
+        assert!(json["indexing_latency"]["p50_us"].is_u64());
+        assert!(json["indexing_latency"]["p95_us"].is_u64());
+        assert!(json["indexing_latency"]["total_samples"].is_u64());
+    }
+
+    #[test]
+    fn brain_status_report_roundtrips_with_metrics() {
+        let report = BrainStatusReport {
+            brain_name: "brain".into(),
+            brain_id: "eAx_dEFA".into(),
+            tasks_open: 5,
+            tasks_in_progress: 1,
+            tasks_blocked: 0,
+            tasks_done: 12,
+            stuck_files: 2,
+            stale_hashes_prevented: 7,
+            metrics: sample_metrics_snapshot(),
+        };
+        assert_eq!(roundtrip(&report), report);
+    }
+
+    #[test]
+    fn job_summary_roundtrips_with_status_and_started_at() {
+        let job = JobSummary {
+            job_id: "job-abc".into(),
+            kind: "summarize_scope".into(),
+            ref_id: "sum-123".into(),
+            attempts: 2,
+            last_error: Some("connection refused".into()),
+            status: "failed".into(),
+            started_at: Some("2026-05-18T12:00:00Z".into()),
+            updated_at: "2026-05-18T12:01:00Z".into(),
+        };
+        assert_eq!(roundtrip(&job), job);
+    }
+
+    #[test]
+    fn job_summary_roundtrips_with_no_started_at() {
+        let job = JobSummary {
+            job_id: "job-def".into(),
+            kind: "consolidate_cluster".into(),
+            ref_id: "cluster-9".into(),
+            attempts: 0,
+            last_error: None,
+            status: "pending".into(),
+            started_at: None,
+            updated_at: "2026-05-18T12:01:00Z".into(),
+        };
+        assert_eq!(roundtrip(&job), job);
+    }
+
+    #[test]
+    fn jobs_status_params_default_matches_legacy_mcp_defaults() {
+        let p = JobsStatusParams::default();
+        assert_eq!(p.kind, None);
+        assert_eq!(p.status, None);
+        assert_eq!(p.limit, 10);
+    }
+
+    #[test]
+    fn jobs_status_params_roundtrips() {
+        let p = JobsStatusParams {
+            kind: Some("summarize_scope".into()),
+            status: Some("failed".into()),
+            limit: 25,
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_jobs_status_roundtrips_with_params() {
+        let req = Request::JobsStatus {
+            params: JobsStatusParams {
+                kind: Some("consolidate_cluster".into()),
+                status: Some("ready".into()),
+                limit: 5,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_jobs_status_wire_format_is_stable() {
+        let req = Request::JobsStatus {
+            params: JobsStatusParams::default(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"jobs_status","params":{"kind":null,"status":null,"limit":10}}"#
+        );
+    }
+
+    #[test]
+    fn jobs_status_report_roundtrips_with_listing_status() {
+        let report = JobsStatusReport {
+            pending: 1,
+            running: 2,
+            ready: 3,
+            done: 4,
+            failed: 5,
+            listing_status: "failed".into(),
+            recent_failures: vec![],
+            stuck_jobs: vec![],
+        };
+        assert_eq!(roundtrip(&report), report);
+    }
+
+    // ── records.search + records.fetch_content wire-shape tests ─────────
+
+    fn sample_record_hit() -> WireRecordHit {
+        WireRecordHit {
+            record_id: "rec_abc".into(),
+            memory_id: "record:rec_abc:0".into(),
+            title: "Rust notes".into(),
+            summary: "Two-sentence summary about Rust.".into(),
+            score: 0.8423,
+            kind: "record".into(),
+            uri: "synapse://brain/record/rec_abc".into(),
+            brain_name: None,
+        }
+    }
+
+    #[test]
+    fn records_search_params_default_matches_legacy_mcp() {
+        let p = RecordsSearchParams::default();
+        assert_eq!(p.k, 10);
+        assert_eq!(p.budget_tokens, 800);
+        assert!(p.tags.is_empty());
+        assert!(p.brains.is_empty());
+    }
+
+    #[test]
+    fn records_search_params_default_via_serde() {
+        // Wire JSON that omits optional fields should yield the legacy
+        // MCP defaults (k=10, budget_tokens=800, empty tags/brains).
+        let p: RecordsSearchParams =
+            serde_json::from_str(r#"{"query":"hello"}"#).expect("deserialize defaults");
+        assert_eq!(p.query, "hello");
+        assert_eq!(p.k, 10);
+        assert_eq!(p.budget_tokens, 800);
+        assert!(p.tags.is_empty());
+        assert!(p.brains.is_empty());
+    }
+
+    #[test]
+    fn records_search_params_roundtrips() {
+        let p = RecordsSearchParams {
+            query: "rust".into(),
+            k: 5,
+            budget_tokens: 400,
+            tags: vec!["wave:1".into()],
+            brains: vec!["brain".into(), "neural_link".into()],
+        };
+        let json = serde_json::to_vec(&p).unwrap();
+        let back: RecordsSearchParams = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn wire_record_hit_roundtrips_with_brain_name() {
+        let mut hit = sample_record_hit();
+        hit.brain_name = Some("neural_link".into());
+        let json = serde_json::to_vec(&hit).unwrap();
+        let back: WireRecordHit = serde_json::from_slice(&json).unwrap();
+        // `WireRecordHit` derives `PartialEq` (not `Eq`) because of
+        // `score: f64`. Equality still holds bit-for-bit after JSON
+        // round-trip when neither side is NaN.
+        assert_eq!(back, hit);
+    }
+
+    #[test]
+    fn wire_record_hit_skips_brain_name_when_none() {
+        let hit = sample_record_hit();
+        let json = serde_json::to_value(&hit).unwrap();
+        assert!(
+            json.get("brain_name").is_none(),
+            "brain_name=None must be skipped on the wire; got {json}"
+        );
+    }
+
+    #[test]
+    fn records_search_report_roundtrips() {
+        let report = RecordsSearchReport {
+            budget_tokens: 800,
+            used_tokens_est: 42,
+            result_count: 1,
+            total_available: 1,
+            results: vec![sample_record_hit()],
+        };
+        let json = serde_json::to_vec(&report).unwrap();
+        let back: RecordsSearchReport = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back, report);
+    }
+
+    #[test]
+    fn request_records_search_roundtrips_with_params() {
+        let req = Request::RecordsSearch {
+            params: RecordsSearchParams {
+                query: "rust".into(),
+                k: 5,
+                budget_tokens: 400,
+                tags: vec!["wave:1".into()],
+                brains: vec![],
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_records_search_roundtrips() {
+        let res = Response::RecordsSearch {
+            report: RecordsSearchReport {
+                budget_tokens: 800,
+                used_tokens_est: 0,
+                result_count: 0,
+                total_available: 0,
+                results: vec![],
+            },
+        };
+        let bytes = serde_json::to_vec(&res).unwrap();
+        let back: Response = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back, res);
+    }
+
+    #[test]
+    fn records_fetch_content_params_roundtrips() {
+        let p = RecordsFetchContentParams {
+            record_id: "rec_abc".into(),
+            brain: Some("neural_link".into()),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn record_content_text_roundtrips() {
+        let c = RecordContent {
+            record_id: "rec_abc".into(),
+            title: "Notes".into(),
+            kind: "document".into(),
+            content_hash: "sha256:cafe".into(),
+            size: 5,
+            media_type: Some("text/plain".into()),
+            encoding: "utf-8".into(),
+            text: Some("hello".into()),
+            data_base64: None,
+            uri: "synapse://brain/record/rec_abc".into(),
+            brain: None,
+        };
+        assert_eq!(roundtrip(&c), c);
+    }
+
+    #[test]
+    fn record_content_binary_roundtrips() {
+        let c = RecordContent {
+            record_id: "rec_bin".into(),
+            title: "Binary".into(),
+            kind: "snapshot".into(),
+            content_hash: "sha256:beef".into(),
+            size: 4,
+            media_type: Some("application/octet-stream".into()),
+            encoding: "base64".into(),
+            text: None,
+            data_base64: Some("3q2+7w==".into()),
+            uri: "synapse://brain/record/rec_bin".into(),
+            brain: Some("neural_link".into()),
+        };
+        assert_eq!(roundtrip(&c), c);
+    }
+
+    #[test]
+    fn record_content_skips_none_optionals_on_wire() {
+        let c = RecordContent {
+            record_id: "rec_abc".into(),
+            title: "Notes".into(),
+            kind: "document".into(),
+            content_hash: "sha256:cafe".into(),
+            size: 5,
+            media_type: None,
+            encoding: "utf-8".into(),
+            text: Some("hi".into()),
+            data_base64: None,
+            uri: "synapse://brain/record/rec_abc".into(),
+            brain: None,
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        assert!(json.get("media_type").is_none());
+        // `data_base64` is renamed to `"data"` on the wire — assert the
+        // wire key is absent when the Rust field is `None`.
+        assert!(json.get("data").is_none());
+        assert!(json.get("data_base64").is_none());
+        assert!(json.get("brain").is_none());
+        // `text` is populated so it must be on the wire.
+        assert_eq!(json["text"], "hi");
+    }
+
+    #[test]
+    fn record_content_binary_uses_data_wire_key() {
+        // Byte-shape parity with legacy `records.fetch_content` MCP
+        // envelope: the base64 payload travels under the `data` key,
+        // not `data_base64`.
+        let c = RecordContent {
+            record_id: "rec_bin".into(),
+            title: "Binary".into(),
+            kind: "snapshot".into(),
+            content_hash: "sha256:beef".into(),
+            size: 4,
+            media_type: Some("application/octet-stream".into()),
+            encoding: "base64".into(),
+            text: None,
+            data_base64: Some("3q2+7w==".into()),
+            uri: "synapse://brain/record/rec_bin".into(),
+            brain: None,
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        assert!(
+            json.get("data_base64").is_none(),
+            "Rust-side name must not leak to wire"
+        );
+        assert_eq!(json["data"], "3q2+7w==");
+    }
+
+    #[test]
+    fn request_records_fetch_content_roundtrips() {
+        let req = Request::RecordsFetchContent {
+            params: RecordsFetchContentParams {
+                record_id: "rec_abc".into(),
+                brain: None,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
     }
 }

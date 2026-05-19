@@ -111,7 +111,7 @@ impl Dispatcher for DefaultDispatcher {
             | Request::MemoryReflect { .. }
             | Request::TagsAliasesList { .. }
             | Request::TagsAliasesStatus
-            | Request::JobsStatus
+            | Request::JobsStatus { .. }
             | Request::BrainStatus
             | Request::ProviderList
             | Request::LinksAdd { .. }
@@ -122,6 +122,8 @@ impl Dispatcher for DefaultDispatcher {
             | Request::RecordsLinkRemove { .. }
             | Request::RecordsTagAdd { .. }
             | Request::RecordsTagRemove { .. }
+            | Request::RecordsSearch { .. }
+            | Request::RecordsFetchContent { .. }
             | Request::TasksApplyEvent { .. }
             | Request::TasksDepsBatch { .. }
             | Request::TasksLabelsBatch { .. }

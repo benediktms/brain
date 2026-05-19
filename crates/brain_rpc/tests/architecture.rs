@@ -95,10 +95,10 @@ fn no_forbidden_crate_imports_in_src_or_tests() {
                 Err(_) => continue,
             };
             for (idx, line) in content.lines().enumerate() {
-                if let Some(first) = first_use_segment(line) {
-                    if FORBIDDEN_CRATES.contains(&first) {
-                        violations.push(format!("{}:{}: {}", file.display(), idx + 1, line.trim()));
-                    }
+                if let Some(first) = first_use_segment(line)
+                    && FORBIDDEN_CRATES.contains(&first)
+                {
+                    violations.push(format!("{}:{}: {}", file.display(), idx + 1, line.trim()));
                 }
             }
         }

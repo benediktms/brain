@@ -79,6 +79,13 @@ pub fn run_cli() -> std::process::ExitCode {
         return ExitCode::from(2);
     };
 
+    // Install a tracing subscriber so events from brain_lib (RPC dispatch spans)
+    // are visible in the daemon's stderr. The EnvFilter reads RUST_LOG as usual,
+    // defaulting to error if unset.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     // If --sqlite-db was not supplied, derive a default from $BRAIN_HOME
     // (or $HOME/.brain/ if BRAIN_HOME is unset) — but only when the
     // resolved file actually exists. This lets `connect_or_spawn` auto-
@@ -358,6 +365,9 @@ pub(crate) fn resolve_brain_home() -> Option<std::path::PathBuf> {
 mod tests {
     use super::resolve_brain_home;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper: run a closure with specific env vars set, restoring
     /// originals afterwards. Uses a mutex guard from `std::sync` to
@@ -365,8 +375,11 @@ mod tests {
     /// state is global and cargo-nextest runs tests in parallel.
     fn with_env<F>(vars: &[(&str, Option<&str>)], f: F)
     where
-        F: FnOnce(),
+        F: FnOnce() + std::panic::UnwindSafe,
     {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Save and set.
         let saved: Vec<(&str, Option<String>)> = vars
             .iter()
@@ -388,8 +401,7 @@ mod tests {
             }
         }
 
-        f();
-
+        let result = std::panic::catch_unwind(f);
         // Restore.
         for (k, v) in &saved {
             // SAFETY: see the env-mutation block above — same conditions
@@ -400,6 +412,9 @@ mod tests {
                     None => std::env::remove_var(k),
                 }
             }
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
         }
     }
 

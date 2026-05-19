@@ -36,6 +36,26 @@ use super::registry::{
 use super::routing::{build_prefix_map, event_primary_path, lookup_brain};
 use super::shutdown::{ShutdownOutcome, ShutdownReason, drain_with_timeout};
 
+/// Initialise the BrainRouter's RPC client after the daemon socket is listening.
+///
+/// This must be called *after* `IpcServer::bind` because `BrainRouter` acts as
+/// a client to its own socket — the socket must exist before `connect()` runs.
+fn init_router_client(
+    sock_path: &Path,
+    router: &Arc<brain_lib::ipc::router::BrainRouter>,
+) -> Result<()> {
+    let transport = brain_rpc::UnixSocketTransport::connect(sock_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to connect IPC transport to {}: {e}",
+            sock_path.display()
+        )
+    })?;
+    let client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("failed to hand off IPC transport to DaemonClient: {e}"))?;
+    router.set_client(client);
+    Ok(())
+}
+
 /// The long-running watcher supervisor. Owns per-brain pipelines and routes
 /// file events to the right one. The dispatcher talks to it via WatcherHandle.
 pub struct Supervisor {
@@ -148,7 +168,7 @@ impl Supervisor {
             let projections: Vec<BrainProjection> = brains
                 .iter()
                 .filter_map(|(name, inst)| {
-                    let bid = inst.mcp_context.brain_id().to_string();
+                    let bid = inst.brain_id.clone();
                     global_cfg.brains.get(name).map(|entry| {
                         let prefix = existing_prefixes
                             .get(&bid)
@@ -179,25 +199,33 @@ impl Supervisor {
         }
 
         // ── 3c. Start IPC server ─────────────────────────────────────────
-        let shared_ctx = brains
+        let default_brain_id = brains
             .values()
             .next()
-            .map(|inst| Arc::clone(&inst.mcp_context))
+            .map(|inst| inst.brain_id.clone())
             .expect("at least one brain is initialised");
-        let default_brain_id = shared_ctx.brain_id().to_string();
-        let router = BrainRouter::new(shared_ctx, default_brain_id);
 
         let sock_path = brain_home()
             .map(|h| h.join("brain.sock"))
             .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
 
-        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
+        // Create a disconnected router — the socket doesn't exist yet (it gets
+        // bound by IpcServer::bind below). BrainRouter connects to its own
+        // socket, so the socket must be listening before connect() is called.
+        let router = BrainRouter::new_disconnected(default_brain_id);
+
+        let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, router.clone()) {
             Ok(server) => {
                 let token = server.cancellation_token();
                 let inode = {
                     use std::os::unix::fs::MetadataExt;
                     std::fs::metadata(&sock_path).map(|m| m.ino()).unwrap_or(0)
                 };
+                // Now that the socket is listening, initialize the router's
+                // RPC client so IPC connections can be dispatched.
+                if let Err(e) = init_router_client(&sock_path, &router) {
+                    warn!(error = %e, "failed to connect IPC router to daemon socket; continuing without IPC");
+                }
                 tokio::spawn(async move { server.run().await });
                 info!(path = ?sock_path, "IPC server started");
                 (Some(token), inode)
@@ -241,40 +269,47 @@ impl Supervisor {
         }
 
         // ── 5b. Separate notify watcher for state_projection.toml ─────────
-        let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
-        let projection_dir = projection_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
-            .to_path_buf();
+        // `config_rx` is always bound so it's in scope for `run_loop`, but
+        // under `no-default-features` the sender is never used (the watcher
+        // block below is cfg-gated and `config_rx` will never receive).
         let (config_tx, config_rx) = tokio::sync::mpsc::channel::<()>(4);
 
+        #[cfg(feature = "embed")]
         let _config_watcher = {
-            let config_tx = config_tx.clone();
+            let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
+            let projection_dir = projection_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
+                .to_path_buf();
             let projection_file = projection_path.file_name().unwrap().to_owned();
-            notify_debouncer_full::new_debouncer(
-                Duration::from_millis(500),
-                None,
-                move |result: notify_debouncer_full::DebounceEventResult| {
-                    if let Ok(events) = result {
-                        let is_projection = events
-                            .iter()
-                            .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
-                        if is_projection {
-                            let _ = config_tx.blocking_send(());
+
+            {
+                let config_tx = config_tx.clone();
+                notify_debouncer_full::new_debouncer(
+                    Duration::from_millis(500),
+                    None,
+                    move |result: notify_debouncer_full::DebounceEventResult| {
+                        if let Ok(events) = result {
+                            let is_projection = events
+                                .iter()
+                                .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
+                            if is_projection {
+                                let _ = config_tx.blocking_send(());
+                            }
                         }
-                    }
-                },
-            )
-            .and_then(|mut w| {
-                w.watch(
-                    &projection_dir,
-                    notify_debouncer_full::notify::RecursiveMode::NonRecursive,
-                )?;
-                info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
-                Ok(w)
-            })
-            .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
-            .ok()
+                    },
+                )
+                .and_then(|mut w| {
+                    w.watch(
+                        &projection_dir,
+                        notify_debouncer_full::notify::RecursiveMode::NonRecursive,
+                    )?;
+                    info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
+                    Ok(w)
+                })
+                .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
+                .ok()
+            }
         };
 
         // ── 6. Signal handlers ───────────────────────────────────────────
@@ -502,7 +537,7 @@ impl Supervisor {
                 _ = summarize_poll_interval.tick() => {
                     for instance in self.brains.values() {
                         let brain_infos = vec![recurring_jobs::BrainInfo {
-                            brain_id: instance.mcp_context.brain_id().to_string(),
+                            brain_id: instance.brain_id.clone(),
                         }];
                         if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.job_queue(), &brain_infos) {
                             tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
@@ -678,7 +713,7 @@ impl Supervisor {
         self.brains
             .values()
             .flat_map(|inst| {
-                let brain_id = inst.mcp_context.brain_id().to_string();
+                let brain_id = inst.brain_id.clone();
                 let name = inst.name.clone();
                 inst.note_dirs.iter().map(move |dir| WatchEntry {
                     brain_name: name.clone(),

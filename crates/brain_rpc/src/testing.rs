@@ -108,7 +108,7 @@ impl InMemoryTransport {
             | Request::MemoryReflect { .. }
             | Request::TagsAliasesList { .. }
             | Request::TagsAliasesStatus
-            | Request::JobsStatus
+            | Request::JobsStatus { .. }
             | Request::BrainStatus
             | Request::ProviderList
             | Request::WatchAdd { .. }
@@ -122,6 +122,8 @@ impl InMemoryTransport {
             | Request::RecordsLinkRemove { .. }
             | Request::RecordsTagAdd { .. }
             | Request::RecordsTagRemove { .. }
+            | Request::RecordsSearch { .. }
+            | Request::RecordsFetchContent { .. }
             | Request::TasksApplyEvent { .. }
             | Request::TasksDepsBatch { .. }
             | Request::TasksLabelsBatch { .. }
