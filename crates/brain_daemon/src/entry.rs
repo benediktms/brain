@@ -81,7 +81,7 @@ pub fn run_cli() -> std::process::ExitCode {
 
     // Install a tracing subscriber so events from brain_lib (RPC dispatch spans)
     // are visible in the daemon's stderr. The EnvFilter reads RUST_LOG as usual,
-    // defaulting to info if unset.
+    // defaulting to error if unset.
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
