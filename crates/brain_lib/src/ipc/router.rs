@@ -86,9 +86,10 @@ impl BrainRouter {
             // released before we call block_in_place (which would otherwise
             // hold the guard across the blocking call).
             let inner_arc = {
-                let mut guard = self.client.lock().unwrap();
+                let guard = self.client.lock().unwrap();
                 guard
-                    .take()
+                    .as_ref()
+                    .cloned()
                     .expect("BrainRouter client not set — call set_client() after IpcServer::bind")
             };
             // inner_arc is Arc<DaemonClient>, owned; lock it to get &mut DaemonClient.
