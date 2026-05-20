@@ -38,6 +38,15 @@ pub fn run_set(
     api_key: Option<&str>,
     remote: bool,
 ) -> Result<()> {
+    // Validate provider name before prompting for key via stdin
+    if !VALID_PROVIDERS.contains(&name) {
+        anyhow::bail!(
+            "invalid provider name '{}'. Valid options: {}",
+            name,
+            VALID_PROVIDERS.join(", ")
+        );
+    }
+
     if remote {
         let mut client = rpc_client::connect_daemon()?;
         let key = get_api_key(name, api_key)?;
@@ -46,15 +55,6 @@ pub fn run_set(
             .map_err(|e| anyhow::anyhow!("ProviderSet rpc failed: {e}"))?;
         println!("Provider '{name}' configured (id: {id})");
         return Ok(());
-    }
-
-    // Validate provider name
-    if !VALID_PROVIDERS.contains(&name) {
-        anyhow::bail!(
-            "invalid provider name '{}'. Valid options: {}",
-            name,
-            VALID_PROVIDERS.join(", ")
-        );
     }
 
     let key = get_api_key(name, api_key)?;
@@ -141,7 +141,7 @@ pub fn run_remove(
         client
             .provider_remove(target)
             .map_err(|e| anyhow::anyhow!("ProviderRemove rpc failed: {e}"))?;
-        println!("Removed provider {target}");
+        println!("Removed all providers named '{target}'");
         return Ok(());
     }
 
