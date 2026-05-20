@@ -31,7 +31,7 @@ pub fn run_set(
 
         let mut client = rpc_client::connect_daemon()?;
         let id = client
-            .provider_set(name, &key)
+            .provider_set(name, key)
             .map_err(|e| anyhow::anyhow!("ProviderSet rpc failed: {e}"))?;
         println!("Provider '{name}' configured (id: {id})");
         return Ok(());
