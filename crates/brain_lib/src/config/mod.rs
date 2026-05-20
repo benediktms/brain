@@ -1,6 +1,8 @@
 pub mod paths;
 
 use std::collections::HashMap;
+
+use brain_persistence::ports::ProviderStore;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -652,6 +654,24 @@ pub(crate) fn resolve_brain_paths_with_home(
 pub fn resolve_paths_for_brain(name: &str) -> Result<ResolvedPaths> {
     let home = brain_home()?;
     Ok(resolve_paths_for_brain_with_home(name, &home))
+}
+
+/// Sync the providers list from DB to state_projection.toml (metadata only).
+pub fn project_providers_to_config(stores: &crate::stores::BrainStores) -> Result<()> {
+    let providers = stores.list_providers()?;
+    let entries: Vec<ProviderEntry> = providers
+        .iter()
+        .map(|p| ProviderEntry {
+            id: p.id.clone(),
+            name: p.name.clone(),
+        })
+        .collect();
+
+    let mut cfg = load_global_config()?;
+    cfg.providers = entries;
+    save_global_config(&cfg)?;
+
+    Ok(())
 }
 
 /// Internal: resolve paths for a named brain given an explicit `home` directory.

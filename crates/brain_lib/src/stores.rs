@@ -1247,6 +1247,13 @@ impl ProviderStore for crate::stores::BrainStores {
     fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>> {
         ProviderStore::get_provider_by_name(self.inner_db(), name)
     }
+    fn get_provider_by_name_and_hash(
+        &self,
+        name: &str,
+        api_key_hash: &str,
+    ) -> Result<Option<ProviderRow>> {
+        ProviderStore::get_provider_by_name_and_hash(self.inner_db(), name, api_key_hash)
+    }
     fn list_providers(&self) -> Result<Vec<ProviderRow>> {
         ProviderStore::list_providers(self.inner_db())
     }

@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A client-originated message sent over the wire.
 ///
@@ -203,6 +203,12 @@ pub enum Request {
     /// (kind / status / limit) so the daemon — not the MCP tool — owns
     /// the filtering loop.
     JobsStatus { params: JobsStatusParams },
+    /// Retry a failed job by ID. Server returns
+    /// [`Response::JobsRetrySuccess`] or error if job not in Failed state.
+    JobsRetry { params: JobsRetryParams },
+    /// Delete completed jobs older than N days. Server returns
+    /// [`Response::JobsGcDone`].
+    JobsGc { params: JobsGcParams },
 
     // ── status ──────────────────────────────────────────────────────────
     /// Show brain health status. Server returns [`Response::BrainStatus`].
@@ -212,6 +218,12 @@ pub enum Request {
     /// List configured providers. Server returns
     /// [`Response::ProviderList`].
     ProviderList,
+    /// Set a provider API key. Server returns
+    /// [`Response::ProviderSetDone`].
+    ProviderSet { params: ProviderSetParams },
+    /// Remove a provider. Server returns
+    /// [`Response::ProviderRemoveDone`].
+    ProviderRemove { params: ProviderRemoveParams },
 
     // ── watch ────────────────────────────────────────────────────────────
     /// Register a filesystem path for watching. Server returns
@@ -657,6 +669,10 @@ pub enum Response {
     // ── jobs ────────────────────────────────────────────────────────────
     /// Reply to [`Request::JobsStatus`].
     JobsStatus { report: JobsStatusReport },
+    /// Reply to [`Request::JobsRetry`].
+    JobsRetrySuccess { job_id: String },
+    /// Reply to [`Request::JobsGc`].
+    JobsGcDone { deleted: u64 },
 
     // ── status ──────────────────────────────────────────────────────────
     /// Reply to [`Request::BrainStatus`].
@@ -665,6 +681,10 @@ pub enum Response {
     // ── provider ────────────────────────────────────────────────────────
     /// Reply to [`Request::ProviderList`].
     ProviderList { providers: Vec<ProviderSummary> },
+    /// Reply to [`Request::ProviderSet`].
+    ProviderSetDone { id: String },
+    /// Reply to [`Request::ProviderRemove`].
+    ProviderRemoveDone,
 
     // ── watch ────────────────────────────────────────────────────────────
     /// Reply to [`Request::WatchAdd`].
@@ -1205,6 +1225,40 @@ impl Default for JobsStatusParams {
             limit: 10,
         }
     }
+}
+
+/// Params for [`Request::JobsRetry`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobsRetryParams {
+    pub job_id: String,
+}
+
+/// Params for [`Request::JobsGc`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobsGcParams {
+    pub older_than_days: u32,
+}
+
+/// Params for [`Request::ProviderSet`].
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ProviderSetParams {
+    pub name: String,
+    pub api_key: String,
+}
+
+impl std::fmt::Debug for ProviderSetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderSetParams")
+            .field("name", &self.name)
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Params for [`Request::ProviderRemove`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRemoveParams {
+    pub target: String,
 }
 
 // ── status wire types ─────────────────────────────────────────────────────────
@@ -1806,14 +1860,12 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_four() {
-        // Bumped 3 → 4 when Request::RecordsSearch +
-        // Request::RecordsFetchContent (and their Response twins) were
-        // added so the daemon answers records.search +
-        // records.fetch_content MCP tools directly. The handshake
-        // check rejects rolling restarts that pair a pre-bump client
-        // with a post-bump daemon.
-        assert_eq!(PROTOCOL_VERSION, 4);
+    fn protocol_version_is_five() {
+        // Bumped 4 → 5 when Request::JobsRetry, JobsGc, ProviderSet,
+        // ProviderRemove (and their Response twins) were added so the
+        // daemon answers brain jobs retry/gc and brain config provider
+        // set/remove CLI commands directly.
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     #[test]
@@ -3689,6 +3741,108 @@ mod tests {
             stuck_jobs: vec![],
         };
         assert_eq!(roundtrip(&report), report);
+    }
+
+    #[test]
+    fn jobs_retry_params_roundtrips() {
+        let p = JobsRetryParams {
+            job_id: "job_abc123".into(),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_jobs_retry_roundtrips() {
+        let req = Request::JobsRetry {
+            params: JobsRetryParams {
+                job_id: "job_def456".into(),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn jobs_gc_params_roundtrips() {
+        let p = JobsGcParams {
+            older_than_days: 30,
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_jobs_gc_roundtrips() {
+        let req = Request::JobsGc {
+            params: JobsGcParams { older_than_days: 7 },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn provider_set_params_roundtrips() {
+        let p = ProviderSetParams {
+            name: "openai".into(),
+            api_key: "sk-secret".into(),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_provider_set_roundtrips() {
+        let req = Request::ProviderSet {
+            params: ProviderSetParams {
+                name: "anthropic".into(),
+                api_key: "sk-ant-api".into(),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn provider_remove_params_roundtrips() {
+        let p = ProviderRemoveParams {
+            target: "openai".into(),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_provider_remove_roundtrips() {
+        let req = Request::ProviderRemove {
+            params: ProviderRemoveParams {
+                target: "anthropic".into(),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    // ── jobs retry / gc + provider wire-shape tests ─────────────────
+
+    #[test]
+    fn response_jobs_retry_success_roundtrips() {
+        let resp = Response::JobsRetrySuccess {
+            job_id: "job_abc123".into(),
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_jobs_gc_done_roundtrips() {
+        let resp = Response::JobsGcDone { deleted: 42 };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_provider_set_done_roundtrips() {
+        let resp = Response::ProviderSetDone {
+            id: "prov_xyz".into(),
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_provider_remove_done_roundtrips() {
+        let resp = Response::ProviderRemoveDone;
+        assert_eq!(roundtrip(&resp), resp);
     }
 
     // ── records.search + records.fetch_content wire-shape tests ─────────

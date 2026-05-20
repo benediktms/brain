@@ -15,26 +15,31 @@
 
 use std::sync::{Arc, OnceLock};
 
+use brain_lib::ports::{JobQueue, ProviderStore};
 use brain_lib::prelude::Embed;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
+use brain_persistence::db::crypto::{encrypt, hash_api_key, load_or_create_master_key};
+use brain_persistence::db::providers::InsertProvider;
 use brain_persistence::db::sagas::compact_saga_id;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
 };
 use brain_rpc::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
-    JobSummary, JobsStatusParams, JobsStatusReport, LatencyHistogram, MemoryConsolidateParams,
-    MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION,
-    PlanSummary, ProviderSummary, RecordContent, RecordsCreateParams, RecordsFetchContentParams,
-    RecordsListParams, RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request,
-    Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
-    SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
-    SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
-    TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
-    TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams,
-    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams, WireRecordHit,
+    JobSummary, JobsGcParams, JobsRetryParams, JobsStatusParams, JobsStatusReport,
+    LatencyHistogram, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
+    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION, PlanSummary,
+    ProviderRemoveParams, ProviderSetParams, ProviderSummary, RecordContent, RecordsCreateParams,
+    RecordsFetchContentParams, RecordsListParams, RecordsSearchParams, RecordsSearchReport,
+    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeOutcome,
+    SagaCascadeResult, SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
+    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
+    TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams,
+    TaskSummary, TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams,
+    TasksLabelsBatchParams, TasksListParams, TasksMutateParams, TasksTransferParams,
+    TasksUpdateParams, WireRecordHit,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -3111,6 +3116,144 @@ impl BrainStoresDispatcher {
         Ok(Response::JobsStatus { report })
     }
 
+    fn handle_jobs_retry(&self, params: JobsRetryParams) -> Result<Response, RpcError> {
+        let retried =
+            self.stores
+                .retry_failed_job(&params.job_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("retry_failed_job failed: {e}"),
+                })?;
+
+        if !retried {
+            return Err(RpcError::NotFound {
+                id: format!(
+                    "job {} is not in the Failed state (or does not exist)",
+                    params.job_id
+                ),
+            });
+        }
+
+        Ok(Response::JobsRetrySuccess {
+            job_id: params.job_id,
+        })
+    }
+
+    fn handle_jobs_gc(&self, params: JobsGcParams) -> Result<Response, RpcError> {
+        use brain_lib::pipeline::recurring_jobs::protected_kinds;
+
+        let protected: Vec<&'static str> = protected_kinds();
+        let age_secs = (params.older_than_days as i64).saturating_mul(86400);
+
+        let deleted = self
+            .stores
+            .gc_completed_jobs(age_secs, &protected)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("gc_completed_jobs failed: {e}"),
+            })?;
+
+        Ok(Response::JobsGcDone {
+            deleted: deleted as u64,
+        })
+    }
+
+    fn handle_provider_set(&self, params: ProviderSetParams) -> Result<Response, RpcError> {
+        use brain_lib::providers::VALID_PROVIDERS;
+
+        // Validate provider name.
+        if !VALID_PROVIDERS.contains(&params.name.as_str()) {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "unknown provider '{}'; valid providers are: {}",
+                    params.name,
+                    VALID_PROVIDERS.join(", ")
+                ),
+            });
+        }
+
+        // Load or create the master key for encryption.
+        let master_key =
+            load_or_create_master_key(&self.stores.brain_home).map_err(|e| RpcError::Unknown {
+                message: format!("failed to load master key: {e}"),
+            })?;
+
+        // Hash the API key for deduplication check.
+        let key_hash = hash_api_key(&params.api_key);
+
+        // Check for duplicate.
+        if self
+            .stores
+            .provider_exists(&params.name, &key_hash)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("provider_exists check failed: {e}"),
+            })?
+        {
+            // Idempotent: already set. Still return the ID.
+            let existing = self
+                .stores
+                .get_provider_by_name_and_hash(&params.name, &key_hash)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("get_provider_by_name_and_hash failed: {e}"),
+                })?
+                .ok_or_else(|| RpcError::Unknown {
+                    message: format!(
+                        "provider '{}' exists but get_provider_by_name_and_hash returned None",
+                        params.name
+                    ),
+                })?;
+            return Ok(Response::ProviderSetDone { id: existing.id });
+        }
+
+        // Encrypt the API key.
+        let encrypted = encrypt(&master_key, &params.api_key).map_err(|e| RpcError::Unknown {
+            message: format!("encrypt failed: {e}"),
+        })?;
+
+        // Insert the provider.
+        let id = self
+            .stores
+            .insert_provider(&InsertProvider {
+                name: &params.name,
+                api_key_encrypted: &encrypted,
+                api_key_hash: &key_hash,
+            })
+            .map_err(|e| RpcError::Unknown {
+                message: format!("insert_provider failed: {e}"),
+            })?;
+
+        // Sync to TOML.
+        brain_lib::config::project_providers_to_config(&self.stores).map_err(|e| {
+            RpcError::Unknown {
+                message: format!("project_providers_to_config failed: {e}"),
+            }
+        })?;
+
+        Ok(Response::ProviderSetDone { id })
+    }
+
+    fn handle_provider_remove(&self, params: ProviderRemoveParams) -> Result<Response, RpcError> {
+        let deleted =
+            self.stores
+                .delete_provider(&params.target)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("delete_provider failed: {e}"),
+                })?;
+
+        if !deleted {
+            return Err(RpcError::NotFound {
+                id: format!("provider '{}' not found", params.target),
+            });
+        }
+
+        // Sync to TOML.
+        brain_lib::config::project_providers_to_config(&self.stores).map_err(|e| {
+            RpcError::Unknown {
+                message: format!("project_providers_to_config failed: {e}"),
+            }
+        })?;
+
+        Ok(Response::ProviderRemoveDone)
+    }
+
     // ── status handler ───────────────────────────────────────────────────────
 
     fn handle_brain_status(&self) -> Result<Response, RpcError> {
@@ -3436,6 +3579,10 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::BrainsList { params } => self.handle_brains_list(params),
             Request::RecordsSearch { params } => self.handle_records_search(params),
             Request::RecordsFetchContent { params } => self.handle_records_fetch_content(params),
+            Request::JobsRetry { params } => self.handle_jobs_retry(params),
+            Request::JobsGc { params } => self.handle_jobs_gc(params),
+            Request::ProviderSet { params } => self.handle_provider_set(params),
+            Request::ProviderRemove { params } => self.handle_provider_remove(params),
         }
     }
 }

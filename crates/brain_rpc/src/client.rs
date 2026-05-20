@@ -25,19 +25,19 @@
 
 use crate::domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
-    DocumentSummary, JobsStatusParams, JobsStatusReport, LinksAddParams, LinksForEntityParams,
-    LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
-    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary, RecordContent,
-    RecordsArchiveParams, RecordsCreateParams, RecordsFetchContentParams, RecordsLinkParams,
-    RecordsListParams, RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request,
-    Response, RpcError, SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount,
-    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
-    SnapshotSummary, TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams,
-    TagsReclusterParams, TaskSummary, TasksApplyEventParams, TasksCreateParams,
-    TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary, WireLinkSummary,
-    WireTaskLabelSummary,
+    DocumentSummary, JobsGcParams, JobsRetryParams, JobsStatusParams, JobsStatusReport,
+    LinksAddParams, LinksForEntityParams, LinksRemoveParams, MemoryConsolidateParams,
+    MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    ProviderRemoveParams, ProviderSetParams, ProviderSummary, RecordContent, RecordsArchiveParams,
+    RecordsCreateParams, RecordsFetchContentParams, RecordsLinkParams, RecordsListParams,
+    RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
+    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
+    TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams,
+    TaskSummary, TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams,
+    TasksLabelsBatchParams, TasksListParams, TasksMutateParams, TasksTransferParams,
+    TasksUpdateParams, WatchSummary, WireBrainSummary, WireLinkSummary, WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1064,6 +1064,84 @@ impl<T: Transport> DaemonClient<T> {
         }
     }
 
+    /// Retry a failed job via [`Request::JobsRetry`].
+    ///
+    /// Retries the job identified by `job_id`. The daemon returns
+    /// [`Response::JobsRetrySuccess`] on success.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::NotFound`] — no job with that ID exists or it is not
+    ///   in the Failed state.
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::JobsRetrySuccess`].
+    pub fn jobs_retry(&mut self, job_id: &str) -> Result<String, RpcError> {
+        let params = JobsRetryParams {
+            job_id: job_id.to_owned(),
+        };
+        match self.call(Request::JobsRetry { params })? {
+            Response::JobsRetrySuccess { job_id } => Ok(job_id),
+            other => Err(RpcError::Protocol {
+                message: format!("expected JobsRetrySuccess in reply to JobsRetry, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Delete completed jobs older than `older_than_days` via [`Request::JobsGc`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::JobsGcDone`].
+    pub fn jobs_gc(&mut self, older_than_days: u32) -> Result<u64, RpcError> {
+        let params = JobsGcParams { older_than_days };
+        match self.call(Request::JobsGc { params })? {
+            Response::JobsGcDone { deleted } => Ok(deleted),
+            other => Err(RpcError::Protocol {
+                message: format!("expected JobsGcDone in reply to JobsGc, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Set or upsert a provider API key via [`Request::ProviderSet`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the provider name is not a valid provider name,
+    ///   or the daemon replied with anything other than [`Response::ProviderSetDone`].
+    pub fn provider_set(&mut self, name: &str, api_key: &str) -> Result<String, RpcError> {
+        let params = ProviderSetParams {
+            name: name.to_owned(),
+            api_key: api_key.to_owned(),
+        };
+        match self.call(Request::ProviderSet { params })? {
+            Response::ProviderSetDone { id } => Ok(id),
+            other => Err(RpcError::Protocol {
+                message: format!("expected ProviderSetDone in reply to ProviderSet, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Remove a provider via [`Request::ProviderRemove`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ProviderRemoveDone`].
+    pub fn provider_remove(&mut self, target: &str) -> Result<(), RpcError> {
+        let params = ProviderRemoveParams {
+            target: target.to_owned(),
+        };
+        match self.call(Request::ProviderRemove { params })? {
+            Response::ProviderRemoveDone => Ok(()),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected ProviderRemoveDone in reply to ProviderRemove, got {other:?}"
+                ),
+            }),
+        }
+    }
+
     /// Get brain health status via [`Request::BrainStatus`].
     ///
     /// The returned [`BrainStatusReport`] carries task counts,
@@ -1737,6 +1815,124 @@ mod tests {
                 );
             }
             Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── jobs_retry ────────────────────────────────────────────────────────
+
+    #[test]
+    fn jobs_retry_returns_job_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::JobsRetry { params } => {
+                assert_eq!(params.job_id, "job-123");
+                Ok(Response::JobsRetrySuccess {
+                    job_id: "job-123".into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let job_id = client.jobs_retry("job-123").expect("jobs_retry");
+        assert_eq!(job_id, "job-123");
+    }
+
+    #[test]
+    fn jobs_retry_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.jobs_retry("job-123") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("JobsRetrySuccess"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── jobs_gc ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn jobs_gc_returns_deleted_count() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::JobsGc { params } => {
+                assert_eq!(params.older_than_days, 7);
+                Ok(Response::JobsGcDone { deleted: 13 })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let deleted = client.jobs_gc(7).expect("jobs_gc");
+        assert_eq!(deleted, 13);
+    }
+
+    #[test]
+    fn jobs_gc_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.jobs_gc(7) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("JobsGcDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── provider_set ─────────────────────────────────────────────────────
+
+    #[test]
+    fn provider_set_returns_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::ProviderSet { params } => {
+                assert_eq!(params.name, "openai");
+                assert_eq!(params.api_key, "sk-test");
+                Ok(Response::ProviderSetDone {
+                    id: "prov_abc".into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let id = client
+            .provider_set("openai", "sk-test")
+            .expect("provider_set");
+        assert_eq!(id, "prov_abc");
+    }
+
+    #[test]
+    fn provider_set_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.provider_set("openai", "sk-test") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("ProviderSetDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── provider_remove ──────────────────────────────────────────────────
+
+    #[test]
+    fn provider_remove_returns_unit() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::ProviderRemove { params } => {
+                assert_eq!(params.target, "openai");
+                Ok(Response::ProviderRemoveDone)
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        client.provider_remove("openai").expect("provider_remove");
+    }
+
+    #[test]
+    fn provider_remove_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.provider_remove("openai") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("ProviderRemoveDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
         }
     }
 

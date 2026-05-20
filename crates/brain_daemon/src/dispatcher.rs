@@ -130,7 +130,11 @@ impl Dispatcher for DefaultDispatcher {
             | Request::TasksLabelsSummary
             | Request::MemoryWalkThread { .. }
             | Request::TagsRecluster { .. }
-            | Request::BrainsList { .. } => Err(RpcError::Unknown {
+            | Request::BrainsList { .. }
+            | Request::JobsRetry { .. }
+            | Request::JobsGc { .. }
+            | Request::ProviderSet { .. }
+            | Request::ProviderRemove { .. } => Err(RpcError::Unknown {
                 message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* / tags_* / \
                           jobs_* / status / provider_* / links_* / brains_* requests not \
                           handled by DefaultDispatcher — start brain-daemon with \

@@ -79,6 +79,25 @@ pub fn get_provider_by_name(conn: &Connection, name: &str) -> SqlResult<Option<P
     }
 }
 
+/// Get the provider matching a given name and key hash.
+/// Used for idempotent upsert to return the correct provider ID when
+/// the same key has already been stored.
+pub fn get_provider_by_name_and_hash(
+    conn: &Connection,
+    name: &str,
+    api_key_hash: &str,
+) -> SqlResult<Option<ProviderRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, api_key, api_key_hash, created_at, updated_at
+         FROM providers WHERE name = ?1 AND api_key_hash = ?2",
+    )?;
+    let mut rows = stmt.query_map(params![name, api_key_hash], row_to_provider)?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
+}
+
 /// List all providers (id and name only — keys are not included in the output
 /// for safety; use `get_provider` to fetch the encrypted key when needed).
 pub fn list_providers(conn: &Connection) -> SqlResult<Vec<ProviderRow>> {

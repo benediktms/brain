@@ -1,5 +1,7 @@
 pub mod chunker;
 pub mod config;
+pub mod providers;
+pub use providers::VALID_PROVIDERS;
 pub mod consolidation;
 pub mod dedup;
 pub mod doctor;

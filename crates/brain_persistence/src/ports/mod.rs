@@ -1592,6 +1592,13 @@ pub trait ProviderStore: Send + Sync {
     /// Get the most recently updated provider for a given name.
     fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>>;
 
+    /// Get the provider matching a given name and key hash.
+    fn get_provider_by_name_and_hash(
+        &self,
+        name: &str,
+        api_key_hash: &str,
+    ) -> Result<Option<ProviderRow>>;
+
     /// List all providers.
     fn list_providers(&self) -> Result<Vec<ProviderRow>>;
 
@@ -1615,6 +1622,14 @@ impl ProviderStore for Db {
 
     fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>> {
         self.get_provider_by_name(name)
+    }
+
+    fn get_provider_by_name_and_hash(
+        &self,
+        name: &str,
+        api_key_hash: &str,
+    ) -> Result<Option<ProviderRow>> {
+        self.get_provider_by_name_and_hash(name, api_key_hash)
     }
 
     fn list_providers(&self) -> Result<Vec<ProviderRow>> {

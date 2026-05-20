@@ -490,6 +490,18 @@ impl Db {
             .into_brain_core()
     }
 
+    /// Get the provider matching a given name and key hash.
+    pub fn get_provider_by_name_and_hash(
+        &self,
+        name: &str,
+        api_key_hash: &str,
+    ) -> Result<Option<providers::ProviderRow>> {
+        self.with_read_conn(|conn| {
+            providers::get_provider_by_name_and_hash(conn, name, api_key_hash)
+        })
+        .into_brain_core()
+    }
+
     /// List all providers.
     pub fn list_providers(&self) -> Result<Vec<providers::ProviderRow>> {
         self.with_read_conn(providers::list_providers)
