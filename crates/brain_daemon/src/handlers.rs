@@ -294,7 +294,7 @@ impl BrainStoresDispatcher {
     fn handle_tasks_create(&self, params: TasksCreateParams) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot create task: daemon is not scoped to a brain (brain_id is empty)".into(),
+                message: "cannot create task: daemon is not scoped to a brain".into(),
             });
         }
         if params.priority > 4 {
@@ -1417,7 +1417,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot write episode: daemon is not scoped to a brain (brain_id is empty)"
+                message: "cannot write episode: daemon is not scoped to a brain"
                     .into(),
             });
         }
@@ -1461,7 +1461,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot write procedure: daemon is not scoped to a brain (brain_id is empty)"
+                message: "cannot write procedure: daemon is not scoped to a brain"
                     .into(),
             });
         }
@@ -1711,7 +1711,7 @@ impl BrainStoresDispatcher {
     fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
         if params.commit && self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot commit reflection: daemon is not scoped to a brain (brain_id is empty)"
+                message: "cannot commit reflection: daemon is not scoped to a brain"
                     .into(),
             });
         }
@@ -2446,7 +2446,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot apply task event: daemon is not scoped to a brain (brain_id is empty)"
+                message: "cannot apply task event: daemon is not scoped to a brain"
                     .into(),
             });
         }
@@ -2887,7 +2887,7 @@ impl BrainStoresDispatcher {
     fn handle_tags_recluster(&self, params: TagsReclusterParams) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot recluster tags: daemon is not scoped to a brain (brain_id is empty)"
+                message: "cannot recluster tags: daemon is not scoped to a brain"
                     .into(),
             });
         }
@@ -4742,6 +4742,65 @@ mod tests {
         assert_eq!(status_to_wire_string(&TaskStatus::Blocked), "blocked");
         assert_eq!(status_to_wire_string(&TaskStatus::Done), "done");
         assert_eq!(status_to_wire_string(&TaskStatus::Cancelled), "cancelled");
+    }
+
+    // ── brain-scoping guard tests ─────────────────────────────────
+
+    /// Verify that unscoped (empty brain_id) dispatcher rejects task creation
+    /// with a clear Protocol error.
+    #[test]
+    fn dispatch_tasks_create_rejects_unscoped_daemon() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksCreate {
+            params: TasksCreateParams {
+                title: "test".into(),
+                description: None,
+                priority: 2,
+                task_type: "task".into(),
+                assignee: None,
+                parent: None,
+            },
+        });
+        match res {
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("not scoped to a brain"),
+                    "expected 'not scoped to a brain', got: {message}"
+                );
+            }
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    /// Verify that memory_reflect with commit=false (prepare mode) succeeds
+    /// even when the daemon is unscoped — the guard only fires on commit=true.
+    #[test]
+    fn dispatch_memory_reflect_prepare_succeeds_on_unscoped_daemon() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::MemoryReflect {
+            params: MemoryReflectParams {
+                commit: false,
+                topic: None,
+                budget: 500,
+                brains: vec![],
+                title: None,
+                content: None,
+                source_ids: vec![],
+                tags: vec![],
+                importance_millis: None,
+            },
+        });
+        // prepare mode should succeed (or at least not be blocked by brain_id guard)
+        // It may fail for other reasons (no search layer in test), but not the guard.
+        match &res {
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    !message.contains("not scoped to a brain"),
+                    "prepare mode should not be blocked by brain_id guard, got: {message}"
+                );
+            }
+            _ => {}
+        }
     }
 
     // ── sagas dispatcher tests ─────────────────────────────────
