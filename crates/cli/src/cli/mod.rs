@@ -540,7 +540,6 @@ pub(crate) enum Command {
         #[arg(long)]
         brain: Option<String>,
     },
-
 }
 
 // ── non-task subcommand enums ───────────────────────────────
