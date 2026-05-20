@@ -128,11 +128,12 @@ impl DaemonSpawner for StdProcessSpawner {
         if let Some(ref pid_path) = self.pid_path {
             cmd.arg("--pid-file").arg(pid_path);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        cmd.spawn()
-            .map_err(|e| RpcError::Transport {
-                message: format!("spawn({}): {e}", binary.display()),
-            })?;
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd.spawn().map_err(|e| RpcError::Transport {
+            message: format!("spawn({}): {e}", binary.display()),
+        })?;
         Ok(())
     }
 

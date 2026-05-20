@@ -209,7 +209,9 @@ impl Daemon {
             None => {
                 // No PID file — check if a daemon is running via socket probe.
                 if self.is_socket_alive() {
-                    eprintln!("Daemon is running but has no PID file (spawned without --pid-file).");
+                    eprintln!(
+                        "Daemon is running but has no PID file (spawned without --pid-file)."
+                    );
                     eprintln!("Cannot stop via PID file. Kill manually using: kill -9 <pid>");
                     eprintln!("Or find the process with: lsof ~/.brain/brain-rpc.sock");
                     return Ok(());
