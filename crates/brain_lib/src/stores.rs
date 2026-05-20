@@ -758,7 +758,7 @@ impl BrainStores {
         // real name, not ".brain".
         let (resolved_brain_name, resolved_brain_home) = if brain_name.starts_with('.') {
             #[allow(clippy::unnecessary_to_owned)]
-            if let Ok(toml) = config::load_brain_toml(&brain_data_dir) {
+            if let Ok(toml) = config::load_brain_toml(brain_data_dir) {
                 (toml.name, brain_data_dir.to_path_buf())
             } else {
                 (brain_name.clone(), brain_home.clone())
