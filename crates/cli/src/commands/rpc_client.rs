@@ -36,7 +36,11 @@ pub fn default_socket_path() -> Result<PathBuf> {
 /// hint about the binary that was (or would have been) spawned.
 pub fn connect_daemon() -> Result<brain_rpc::DaemonClient<brain_rpc::UnixSocketTransport>> {
     let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
+    let pid_path = socket_path
+        .parent()
+        .map(|p| p.join("brain.pid"))
+        .ok_or_else(|| anyhow::anyhow!("socket path has no parent directory"))?;
+    let spawner = brain_rpc::StdProcessSpawner::new().with_pid_path(&pid_path);
     let binary_hint = {
         use brain_rpc::DaemonSpawner as _;
         spawner

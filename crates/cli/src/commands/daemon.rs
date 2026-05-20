@@ -23,6 +23,7 @@ pub struct Daemon {
     log_dir: PathBuf,
     #[allow(dead_code)]
     lock_path: PathBuf,
+    socket_path: PathBuf,
 }
 
 impl Daemon {
@@ -34,10 +35,12 @@ impl Daemon {
         let pid_path = home.join("brain.pid");
         let log_dir = home.join("logs");
         let lock_path = home.join("brain.lock");
+        let socket_path = home.join("brain-rpc.sock");
         Ok(Self {
             pid_path,
             log_dir,
             lock_path,
+            socket_path,
         })
     }
 
@@ -119,6 +122,17 @@ impl Daemon {
             }
         }
 
+        // No live PID file — check if a daemon is running on the socket anyway
+        // (e.g., started via connect_or_spawn without --pid-file).
+        if self.is_socket_alive() {
+            bail!(
+                "Daemon already running on socket (no PID file). \
+                 Cannot start a new daemon.\n\
+                 Find the process with: lsof ~/.brain/brain-rpc.sock\n\
+                 Stop it with: kill <pid>"
+            );
+        }
+
         // Ensure log directory exists before fork so the child can write to it.
         fs::create_dir_all(&self.log_dir)
             .with_context(|| format!("failed to create log dir {}", self.log_dir.display()))?;
@@ -193,6 +207,15 @@ impl Daemon {
         let pid = match self.read_pid_file()? {
             Some((pid, _)) => pid,
             None => {
+                // No PID file — check if a daemon is running via socket probe.
+                if self.is_socket_alive() {
+                    eprintln!(
+                        "Daemon is running but has no PID file (spawned without --pid-file)."
+                    );
+                    eprintln!("Cannot stop via PID file. Kill manually using: kill -9 <pid>");
+                    eprintln!("Or find the process with: lsof ~/.brain/brain-rpc.sock");
+                    return Ok(());
+                }
                 println!("Daemon is not running");
                 return Ok(());
             }
@@ -235,7 +258,14 @@ impl Daemon {
                 let _ = fs::remove_file(&self.pid_path);
                 println!("Daemon is not running (stale PID file for {pid})");
             }
-            None => println!("Daemon is not running"),
+            None => {
+                // No PID file — check if a daemon is listening on the socket.
+                if self.is_socket_alive() {
+                    println!("Daemon is running (socket alive, no PID file)");
+                } else {
+                    println!("Daemon is not running");
+                }
+            }
         }
         Ok(())
     }
@@ -279,6 +309,16 @@ impl Daemon {
             return true;
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    /// Probe whether a daemon is listening on the socket.
+    /// Returns `true` if the socket file exists and a connection succeeds.
+    fn is_socket_alive(&self) -> bool {
+        use std::os::unix::net::UnixStream;
+        if !self.socket_path.exists() {
+            return false;
+        }
+        UnixStream::connect(&self.socket_path).is_ok()
     }
 }
 
@@ -529,6 +569,7 @@ mod tests {
             pid_path,
             log_dir,
             lock_path: tmp.path().join("brain.lock"),
+            socket_path: tmp.path().join("brain-rpc.sock"),
         };
         daemon.stop().unwrap();
 

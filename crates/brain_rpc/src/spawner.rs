@@ -54,6 +54,12 @@ pub trait DaemonSpawner {
     /// caller polls for that).
     fn spawn(&self, socket_path: &Path) -> Result<(), RpcError>;
 
+    /// Return the path where the daemon should write its PID file.
+    /// If `None`, the daemon is spawned without `--pid-file`.
+    fn pid_path(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// Resolve the path to the daemon binary.
     ///
     /// Implementations may or may not validate that the path is
@@ -78,13 +84,17 @@ pub trait DaemonSpawner {
 /// process with all stdio redirected to `/dev/null`.
 pub struct StdProcessSpawner {
     hint: Option<PathBuf>,
+    pid_path: Option<PathBuf>,
 }
 
 impl StdProcessSpawner {
     /// Construct a spawner that uses the default resolution order
     /// (env var → current_exe sibling → `$PATH`).
     pub fn new() -> Self {
-        Self { hint: None }
+        Self {
+            hint: None,
+            pid_path: None,
+        }
     }
 
     /// Construct a spawner with an explicit binary path. Bypasses
@@ -92,7 +102,15 @@ impl StdProcessSpawner {
     pub fn with_hint(hint: impl Into<PathBuf>) -> Self {
         Self {
             hint: Some(hint.into()),
+            pid_path: None,
         }
+    }
+
+    /// Set the PID file path. The daemon will be spawned with
+    /// `--pid-file <path>` so it is visible to `brain daemon stop/status`.
+    pub fn with_pid_path(mut self, pid_path: impl Into<PathBuf>) -> Self {
+        self.pid_path = Some(pid_path.into());
+        self
     }
 }
 
@@ -105,17 +123,22 @@ impl Default for StdProcessSpawner {
 impl DaemonSpawner for StdProcessSpawner {
     fn spawn(&self, socket_path: &Path) -> Result<(), RpcError> {
         let binary = self.binary_path()?;
-        Command::new(&binary)
-            .arg("--socket-path")
-            .arg(socket_path)
-            .stdin(Stdio::null())
+        let mut cmd = Command::new(&binary);
+        cmd.arg("--socket-path").arg(socket_path);
+        if let Some(ref pid_path) = self.pid_path {
+            cmd.arg("--pid-file").arg(pid_path);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| RpcError::Transport {
-                message: format!("spawn({}): {e}", binary.display()),
-            })?;
+            .stderr(Stdio::null());
+        cmd.spawn().map_err(|e| RpcError::Transport {
+            message: format!("spawn({}): {e}", binary.display()),
+        })?;
         Ok(())
+    }
+
+    fn pid_path(&self) -> Option<PathBuf> {
+        self.pid_path.clone()
     }
 
     fn binary_path(&self) -> Result<PathBuf, RpcError> {
