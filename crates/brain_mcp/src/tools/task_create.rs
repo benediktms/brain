@@ -104,7 +104,7 @@ struct Params {
     task_type: Option<String>,
     assignee: Option<String>,
     parent: Option<String>,
-    brain: Option<String>,
+    brain: String,
     /// Cross-brain creation+link is not on this wire path; capturing
     /// the field so it gets explicitly rejected rather than silently
     /// dropped.
@@ -155,13 +155,7 @@ impl McpTool for TaskCreate {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            // Cross-brain creation is not supported on this wire path.
-            if parsed.brain.is_some() {
-                return ToolCallResult::error(
-                    "Cross-brain creation via 'brain' param is not yet available on the wire path. \
-                     Use tasks.apply_event with event_type: task_created instead.",
-                );
-            }
+            // Cross-brain creation+link is not on this wire path.
             if parsed.link_from.is_some() || parsed.link_type.is_some() {
                 return ToolCallResult::error(
                     "link_from / link_type params require cross-brain creation, \
@@ -190,6 +184,7 @@ impl McpTool for TaskCreate {
                 task_type: parsed.task_type.unwrap_or_else(|| "task".to_string()),
                 assignee: parsed.assignee,
                 parent: parsed.parent,
+                brain: parsed.brain,
             };
 
             match ctx.with_client(|c| c.tasks_create(wire_params)).await {

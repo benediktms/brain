@@ -54,6 +54,7 @@ fn update_remote(ctx: &TaskCtx, params: &UpdateParams) -> Result<()> {
             .tasks_mutate(brain_rpc::TasksMutateParams {
                 id: params.id.clone(),
                 action: action.to_string(),
+                brain: params.brain.clone(),
             })
             .map_err(|e| anyhow::anyhow!("TasksMutate rpc failed: {e}"))?;
         last_event_id = event_id;
@@ -68,6 +69,7 @@ fn update_remote(ctx: &TaskCtx, params: &UpdateParams) -> Result<()> {
                 description: params.description.clone(),
                 priority: params.priority.map(|p| p.clamp(0, u8::MAX as i32) as u8),
                 assignee: params.assignee.clone(),
+                brain: params.brain.clone(),
             })
             .map_err(|e| anyhow::anyhow!("TasksUpdate rpc failed: {e}"))?;
         last_event_id = event_id;

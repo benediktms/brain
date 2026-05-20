@@ -292,16 +292,13 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_create(&self, params: TasksCreateParams) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot create task: daemon is not scoped to a brain".into(),
-            });
-        }
         if params.priority > 4 {
             return Err(RpcError::Protocol {
                 message: format!("invalid priority: {} (must be 0..=4)", params.priority),
             });
         }
+
+        let (tasks, _brain_id) = self.scoped_task_store(&params.brain)?;
 
         let task_type: TaskType =
             params
@@ -311,27 +308,16 @@ impl BrainStoresDispatcher {
                     message: format!("invalid task_type: {e}"),
                 })?;
 
-        let prefix = self
-            .stores
-            .tasks
-            .get_project_prefix()
-            .map_err(|e| RpcError::Unknown {
-                message: format!("get project prefix: {e}"),
-            })?;
+        let prefix = tasks.get_project_prefix().map_err(|e| RpcError::Unknown {
+            message: format!("get project prefix: {e}"),
+        })?;
         let task_id = brain_tasks::events::new_task_id(&prefix);
 
         // Resolve parent if provided.
         let parent = match params.parent.as_deref() {
-            Some(p) => {
-                Some(
-                    self.stores
-                        .tasks
-                        .resolve_task_id(p)
-                        .map_err(|e| RpcError::Protocol {
-                            message: format!("resolve parent task id: {e}"),
-                        })?,
-                )
-            }
+            Some(p) => Some(tasks.resolve_task_id(p).map_err(|e| RpcError::Protocol {
+                message: format!("resolve parent task id: {e}"),
+            })?),
             None => None,
         };
 
@@ -353,16 +339,11 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append create event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append create event: {e}"),
+        })?;
 
-        let task = self
-            .stores
-            .tasks
+        let task = tasks
             .get_task(&task_id)
             .map_err(|e| RpcError::Unknown {
                 message: format!("refetch created task: {e}"),
@@ -378,11 +359,6 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_update(&self, params: TasksUpdateParams) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot update task: daemon is not scoped to a brain".into(),
-            });
-        }
         if params.priority.is_some_and(|p| p > 4) {
             return Err(RpcError::Protocol {
                 message: format!(
@@ -392,13 +368,13 @@ impl BrainStoresDispatcher {
             });
         }
 
-        let resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&params.id)
-                .map_err(|_| RpcError::NotFound {
-                    id: params.id.clone(),
-                })?;
+        let (tasks, _brain_id) = self.scoped_task_store(&params.brain)?;
+
+        let resolved = tasks
+            .resolve_task_id(&params.id)
+            .map_err(|_| RpcError::NotFound {
+                id: params.id.clone(),
+            })?;
 
         let event = TaskEvent::from_payload(
             &resolved,
@@ -416,16 +392,11 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append update event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append update event: {e}"),
+        })?;
 
-        let task = self
-            .stores
-            .tasks
+        let task = tasks
             .get_task(&resolved)
             .map_err(|e| RpcError::Unknown {
                 message: format!("refetch updated task: {e}"),
@@ -439,11 +410,8 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_mutate(&self, params: TasksMutateParams) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot mutate task: daemon is not scoped to a brain".into(),
-            });
-        }
+        let (tasks, _brain_id) = self.scoped_task_store(&params.brain)?;
+
         let new_status = match params.action.as_str() {
             "close" => TaskStatus::Done,
             "open" => TaskStatus::Open,
@@ -459,28 +427,21 @@ impl BrainStoresDispatcher {
             }
         };
 
-        let resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&params.id)
-                .map_err(|_| RpcError::NotFound {
-                    id: params.id.clone(),
-                })?;
+        let resolved = tasks
+            .resolve_task_id(&params.id)
+            .map_err(|_| RpcError::NotFound {
+                id: params.id.clone(),
+            })?;
 
         let event =
             TaskEvent::from_payload(&resolved, "daemon", StatusChangedPayload { new_status });
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append status event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append status event: {e}"),
+        })?;
 
-        let task = self
-            .stores
-            .tasks
+        let task = tasks
             .get_task(&resolved)
             .map_err(|e| RpcError::Unknown {
                 message: format!("refetch mutated task: {e}"),
@@ -493,30 +454,47 @@ impl BrainStoresDispatcher {
         })
     }
 
+    /// Resolve a (task store, brain_id) pair for task-mutation requests.
+    /// `brain` must always be provided — the daemon is not scoped to any
+    /// particular brain for write operations; the client passes the target
+    /// brain explicitly on the wire.
+    fn scoped_task_store(&self, brain: &str) -> Result<(TaskStore, String), RpcError> {
+        let (bid, bname) =
+            self.stores
+                .tasks
+                .resolve_brain(brain)
+                .map_err(|e| RpcError::Protocol {
+                    message: format!("resolve brain: {e}"),
+                })?;
+        let tasks = self
+            .stores
+            .tasks
+            .with_remote_brain_id(&bid, &bname)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("open target brain task store: {e}"),
+            })?;
+        Ok((tasks, bid))
+    }
+
     fn handle_tasks_add_dep(
         &self,
         task_id: String,
         depends_on_task_id: String,
+        brain: String,
     ) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot add dependency: daemon is not scoped to a brain".into(),
-            });
-        }
-        let task_resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: task_id.clone(),
-                })?;
-        let dep_resolved = self
-            .stores
-            .tasks
-            .resolve_task_id(&depends_on_task_id)
+        let (tasks, _brain_id) = self.scoped_task_store(&brain)?;
+
+        let task_resolved = tasks
+            .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
-                id: depends_on_task_id.clone(),
+                id: task_id.clone(),
             })?;
+        let dep_resolved =
+            tasks
+                .resolve_task_id(&depends_on_task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: depends_on_task_id.clone(),
+                })?;
 
         let event = TaskEvent::new(
             &task_resolved,
@@ -528,12 +506,9 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append dep_added event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append dep_added event: {e}"),
+        })?;
 
         Ok(Response::TasksDepAdded { event_id })
     }
@@ -542,26 +517,21 @@ impl BrainStoresDispatcher {
         &self,
         task_id: String,
         depends_on_task_id: String,
+        brain: String,
     ) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot remove dependency: daemon is not scoped to a brain".into(),
-            });
-        }
-        let task_resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: task_id.clone(),
-                })?;
-        let dep_resolved = self
-            .stores
-            .tasks
-            .resolve_task_id(&depends_on_task_id)
+        let (tasks, _brain_id) = self.scoped_task_store(&brain)?;
+
+        let task_resolved = tasks
+            .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
-                id: depends_on_task_id.clone(),
+                id: task_id.clone(),
             })?;
+        let dep_resolved =
+            tasks
+                .resolve_task_id(&depends_on_task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: depends_on_task_id.clone(),
+                })?;
 
         let event = TaskEvent::new(
             &task_resolved,
@@ -573,29 +543,26 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append dep_removed event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append dep_removed event: {e}"),
+        })?;
 
         Ok(Response::TasksDepRemoved { event_id })
     }
 
-    fn handle_tasks_add_label(&self, task_id: String, label: String) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot add label: daemon is not scoped to a brain".into(),
-            });
-        }
-        let resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: task_id.clone(),
-                })?;
+    fn handle_tasks_add_label(
+        &self,
+        task_id: String,
+        label: String,
+        brain: String,
+    ) -> Result<Response, RpcError> {
+        let (tasks, _brain_id) = self.scoped_task_store(&brain)?;
+
+        let resolved = tasks
+            .resolve_task_id(&task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: task_id.clone(),
+            })?;
 
         let event = TaskEvent::new(
             &resolved,
@@ -605,12 +572,9 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append label_added event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append label_added event: {e}"),
+        })?;
 
         Ok(Response::TasksLabelAdded { event_id })
     }
@@ -619,19 +583,15 @@ impl BrainStoresDispatcher {
         &self,
         task_id: String,
         label: String,
+        brain: String,
     ) -> Result<Response, RpcError> {
-        if self.stores.brain_id.is_empty() {
-            return Err(RpcError::Protocol {
-                message: "cannot remove label: daemon is not scoped to a brain".into(),
-            });
-        }
-        let resolved =
-            self.stores
-                .tasks
-                .resolve_task_id(&task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: task_id.clone(),
-                })?;
+        let (tasks, _brain_id) = self.scoped_task_store(&brain)?;
+
+        let resolved = tasks
+            .resolve_task_id(&task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: task_id.clone(),
+            })?;
 
         let event = TaskEvent::new(
             &resolved,
@@ -641,12 +601,9 @@ impl BrainStoresDispatcher {
         );
         let event_id = event.event_id.clone();
 
-        self.stores
-            .tasks
-            .append(&event)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("append label_removed event: {e}"),
-            })?;
+        tasks.append(&event).map_err(|e| RpcError::Unknown {
+            message: format!("append label_removed event: {e}"),
+        })?;
 
         Ok(Response::TasksLabelRemoved { event_id })
     }
@@ -3582,17 +3539,23 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::TasksAddDep {
                 task_id,
                 depends_on_task_id,
-            } => self.handle_tasks_add_dep(task_id, depends_on_task_id),
+                brain,
+            } => self.handle_tasks_add_dep(task_id, depends_on_task_id, brain),
             Request::TasksRemoveDep {
                 task_id,
                 depends_on_task_id,
-            } => self.handle_tasks_remove_dep(task_id, depends_on_task_id),
-            Request::TasksAddLabel { task_id, label } => {
-                self.handle_tasks_add_label(task_id, label)
-            }
-            Request::TasksRemoveLabel { task_id, label } => {
-                self.handle_tasks_remove_label(task_id, label)
-            }
+                brain,
+            } => self.handle_tasks_remove_dep(task_id, depends_on_task_id, brain),
+            Request::TasksAddLabel {
+                task_id,
+                label,
+                brain,
+            } => self.handle_tasks_add_label(task_id, label, brain),
+            Request::TasksRemoveLabel {
+                task_id,
+                label,
+                brain,
+            } => self.handle_tasks_remove_label(task_id, label, brain),
             Request::TasksTransfer { params } => self.handle_tasks_transfer(params),
             Request::RecordsVerify => self.handle_records_verify(),
             Request::AnalysesList { params } => self.handle_analyses_list(params),
@@ -4629,6 +4592,7 @@ mod tests {
             params: TasksMutateParams {
                 id: "x".into(),
                 action: "bogus".into(),
+                brain: "test-brain".to_string(),
             },
         });
         match res {
@@ -4653,6 +4617,7 @@ mod tests {
                 task_type: "bogus".into(),
                 assignee: None,
                 parent: None,
+                brain: "test-brain".to_string(),
             },
         });
         match res {
@@ -4673,6 +4638,7 @@ mod tests {
                 description: None,
                 priority: None,
                 assignee: None,
+                brain: "test-brain".to_string(),
             },
         });
         match res {
@@ -4687,6 +4653,7 @@ mod tests {
         let res = d.dispatch(Request::TasksAddDep {
             task_id: "missing-a".into(),
             depends_on_task_id: "missing-b".into(),
+            brain: "test-brain".to_string(),
         });
         match res {
             Err(RpcError::NotFound { .. }) => {}
@@ -4700,6 +4667,7 @@ mod tests {
         let res = d.dispatch(Request::TasksAddLabel {
             task_id: "missing".into(),
             label: "blocked".into(),
+            brain: "test-brain".to_string(),
         });
         match res {
             Err(RpcError::NotFound { .. }) => {}
@@ -4713,6 +4681,7 @@ mod tests {
         let res = d.dispatch(Request::TasksRemoveLabel {
             task_id: "missing".into(),
             label: "blocked".into(),
+            brain: "test-brain".to_string(),
         });
         match res {
             Err(RpcError::NotFound { .. }) => {}
@@ -4752,11 +4721,11 @@ mod tests {
 
     // ── brain-scoping guard tests ─────────────────────────────────
 
-    /// Verify that unscoped (empty brain_id) dispatcher rejects task creation
-    /// with a clear Protocol error.
+    /// Verify that a scoped dispatcher rejects task creation for a brain
+    /// that does not exist in the store with a clear Protocol error.
     #[test]
-    fn dispatch_tasks_create_rejects_unscoped_daemon() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+    fn dispatch_tasks_create_rejects_unknown_brain() {
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksCreate {
             params: TasksCreateParams {
                 title: "test".into(),
@@ -4765,13 +4734,14 @@ mod tests {
                 task_type: "task".into(),
                 assignee: None,
                 parent: None,
+                brain: "nonexistent".to_string(),
             },
         });
         match res {
             Err(RpcError::Protocol { message }) => {
                 assert!(
-                    message.contains("not scoped to a brain"),
-                    "expected 'not scoped to a brain', got: {message}"
+                    message.contains("brain not found"),
+                    "expected 'brain not found', got: {message}"
                 );
             }
             other => panic!("expected Protocol error, got {other:?}"),

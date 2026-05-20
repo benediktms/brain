@@ -187,6 +187,11 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                 parent: params
                     .get("parent")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
+                brain: params
+                    .get("brain")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "brain is required".to_string())?,
             },
         },
         "tasks.next" => Request::TasksNext,

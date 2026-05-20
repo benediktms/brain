@@ -71,7 +71,7 @@ pub struct CreateParams {
     pub task_type: TaskType,
     pub assignee: Option<String>,
     pub parent: Option<String>,
-    pub brain: Option<String>,
+    pub brain: String,
     pub remote: bool,
 }
 
@@ -101,6 +101,7 @@ pub struct UpdateParams {
     pub task_type: Option<TaskType>,
     pub assignee: Option<String>,
     pub blocked_reason: Option<String>,
+    pub brain: String,
     pub remote: bool,
 }
 
@@ -130,10 +131,6 @@ pub(super) fn priority_label(p: i32) -> &'static str {
 // ── create ──────────────────────────────────────────────────
 
 fn create_remote(ctx: &TaskCtx, params: &CreateParams) -> Result<()> {
-    if params.brain.is_some() {
-        bail!("--brain selector is not yet supported on the --remote path");
-    }
-
     let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let wire_params = brain_rpc::TasksCreateParams {
@@ -143,6 +140,7 @@ fn create_remote(ctx: &TaskCtx, params: &CreateParams) -> Result<()> {
         task_type: params.task_type.as_str().to_string(),
         assignee: params.assignee.clone(),
         parent: params.parent.clone(),
+        brain: params.brain.clone(),
     };
 
     let (task, event_id) = client
@@ -180,79 +178,22 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
     if params.remote {
         return create_remote(ctx, &params);
     }
-    if let Some(ref brain) = params.brain {
-        // Cross-brain task creation: resolve target brain and write into its scope.
-        let (bid, bname) = ctx.store.resolve_brain(brain)?;
+    // Cross-brain task creation: resolve target brain and write into its scope.
+    let brain = &params.brain;
+    let (bid, bname) = ctx.store.resolve_brain(brain)?;
 
-        // Guard: reject writes to archived brains.
-        if ctx.store.is_brain_archived(&bid)? {
-            bail!("target brain '{bname}' is archived");
-        }
-
-        let remote_store = ctx.store.with_remote_brain_id(&bid, &bname)?;
-        let prefix = remote_store.get_project_prefix()?;
-        let task_id = events::new_task_id(&prefix);
-
-        // Resolve parent task ID against the remote brain if provided.
-        let parent = match params.parent {
-            Some(ref p) => Some(remote_store.resolve_task_id(p)?),
-            None => None,
-        };
-
-        let event = TaskEvent::from_payload(
-            &task_id,
-            "cli",
-            TaskCreatedPayload {
-                title: params.title.clone(),
-                description: params.description.clone(),
-                priority: params.priority,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: Some(params.task_type),
-                assignee: params.assignee.clone(),
-                defer_until: None,
-                parent_task_id: parent.clone(),
-                display_id: None,
-            },
-        );
-
-        remote_store.append(&event)?;
-
-        if ctx.output.is_json_mode() {
-            let task = remote_store
-                .get_task(&task_id)?
-                .ok_or_else(|| anyhow::anyhow!("Task not found after creation: {task_id}"))?;
-            let labels = remote_store.get_task_labels(&task_id)?;
-            let out = json!({
-                "event_id": event.event_id,
-                "task": task_row_to_compact_json(&remote_store, &task, labels),
-                "brain": bname,
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else {
-            let display_id = remote_store.compact_id_or_raw(&task_id);
-            println!("Created task {display_id} in brain '{bname}'");
-            println!("  Title: {}", params.title);
-            println!("  Priority: {}", priority_label(params.priority));
-            println!("  Type: {}", params.task_type.as_str());
-            if let Some(ref a) = params.assignee {
-                println!("  Assignee: {a}");
-            }
-            if let Some(ref p) = params.parent {
-                println!("  Parent: {p}");
-            }
-        }
-
-        return Ok(());
+    // Guard: reject writes to archived brains.
+    if ctx.store.is_brain_archived(&bid)? {
+        bail!("target brain '{bname}' is archived");
     }
 
-    // Local brain path.
-    let prefix = ctx.store.get_project_prefix()?;
+    let remote_store = ctx.store.with_remote_brain_id(&bid, &bname)?;
+    let prefix = remote_store.get_project_prefix()?;
     let task_id = events::new_task_id(&prefix);
 
-    // Resolve parent task ID if provided
+    // Resolve parent task ID against the remote brain if provided.
     let parent = match params.parent {
-        Some(ref p) => Some(ctx.store.resolve_task_id(p)?),
+        Some(ref p) => Some(remote_store.resolve_task_id(p)?),
         None => None,
     };
 
@@ -273,22 +214,22 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
         },
     );
 
-    ctx.store.append(&event)?;
+    remote_store.append(&event)?;
 
     if ctx.output.is_json_mode() {
-        let task = ctx
-            .store
+        let task = remote_store
             .get_task(&task_id)?
             .ok_or_else(|| anyhow::anyhow!("Task not found after creation: {task_id}"))?;
-        let labels = ctx.store.get_task_labels(&task_id)?;
+        let labels = remote_store.get_task_labels(&task_id)?;
         let out = json!({
             "event_id": event.event_id,
-            "task": task_row_to_compact_json(&ctx.store, &task, labels),
+            "task": task_row_to_compact_json(&remote_store, &task, labels),
+            "brain": bname,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        let display_id = ctx.store.compact_id_or_raw(&task_id);
-        println!("Created task {display_id}");
+        let display_id = remote_store.compact_id_or_raw(&task_id);
+        println!("Created task {display_id} in brain '{bname}'");
         println!("  Title: {}", params.title);
         println!("  Priority: {}", priority_label(params.priority));
         println!("  Type: {}", params.task_type.as_str());

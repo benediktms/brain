@@ -7,11 +7,21 @@ use super::TaskCtx;
 
 // ── dep add / dep remove ────────────────────────────────────
 
-pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+pub fn dep_add(
+    ctx: &TaskCtx,
+    task_id: &str,
+    depends_on: &str,
+    brain: &str,
+    remote: bool,
+) -> Result<()> {
     if remote {
         let mut client = crate::commands::rpc_client::connect_daemon()?;
         let event_id = client
-            .tasks_add_dep(task_id.to_string(), depends_on.to_string())
+            .tasks_add_dep(
+                task_id.to_string(),
+                depends_on.to_string(),
+                brain.to_string(),
+            )
             .map_err(|e| anyhow::anyhow!("TasksAddDep rpc failed: {e}"))?;
         if ctx.output.is_json_mode() {
             let out = json!({
@@ -55,11 +65,21 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> 
     Ok(())
 }
 
-pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+pub fn dep_remove(
+    ctx: &TaskCtx,
+    task_id: &str,
+    depends_on: &str,
+    brain: &str,
+    remote: bool,
+) -> Result<()> {
     if remote {
         let mut client = crate::commands::rpc_client::connect_daemon()?;
         let event_id = client
-            .tasks_remove_dep(task_id.to_string(), depends_on.to_string())
+            .tasks_remove_dep(
+                task_id.to_string(),
+                depends_on.to_string(),
+                brain.to_string(),
+            )
             .map_err(|e| anyhow::anyhow!("TasksRemoveDep rpc failed: {e}"))?;
         if ctx.output.is_json_mode() {
             let out = json!({

@@ -107,6 +107,7 @@ impl McpTool for TaskClose {
                 let wire_params = TasksMutateParams {
                     id: id.clone(),
                     action: "close".to_string(),
+                    brain: "brn".to_string(),
                 };
 
                 match ctx.with_client(|c| c.tasks_mutate(wire_params)).await {

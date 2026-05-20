@@ -440,13 +440,20 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         blocked,
                         include_description,
                         group_by,
-                        brain,
+                        brain: Some(brain),
                         remote,
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
                 TasksAction::Show { id, brain, remote } => {
-                    commands::tasks::run::show(&ctx, ShowParams { id, brain, remote })?;
+                    commands::tasks::run::show(
+                        &ctx,
+                        ShowParams {
+                            id,
+                            brain: Some(brain),
+                            remote,
+                        },
+                    )?;
                 }
                 TasksAction::Update {
                     id,
@@ -457,6 +464,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task_type,
                     assignee,
                     blocked_reason,
+                    brain,
                     remote,
                 } => {
                     commands::tasks::run::update(
@@ -470,6 +478,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_type: task_type.map(Into::into),
                             assignee,
                             blocked_reason,
+                            brain,
                             remote,
                         },
                     )?;
@@ -478,16 +487,24 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     DepAction::Add {
                         task_id,
                         depends_on,
+                        brain,
                         remote,
                     } => {
-                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on, remote)?;
+                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on, &brain, remote)?;
                     }
                     DepAction::Remove {
                         task_id,
                         depends_on,
+                        brain,
                         remote,
                     } => {
-                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on, remote)?;
+                        commands::tasks::run::dep_remove(
+                            &ctx,
+                            &task_id,
+                            &depends_on,
+                            &brain,
+                            remote,
+                        )?;
                     }
                     DepAction::AddChain { task_ids } => {
                         commands::tasks::run::dep_add_chain(&ctx, &task_ids)?;
@@ -545,7 +562,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             &ctx,
                             &task_id,
                             &label,
-                            brain.as_deref(),
+                            Some(brain.as_str()),
                             remote,
                         )?;
                     }
@@ -559,7 +576,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             &ctx,
                             &task_id,
                             &label,
-                            brain.as_deref(),
+                            Some(brain.as_str()),
                             remote,
                         )?;
                     }
@@ -568,12 +585,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         label,
                         brain,
                     } => {
-                        commands::tasks::run::label_batch_add(
-                            &ctx,
-                            &tasks,
-                            &label,
-                            brain.as_deref(),
-                        )?;
+                        commands::tasks::run::label_batch_add(&ctx, &tasks, &label, Some(&brain))?;
                     }
                     LabelAction::BatchRemove {
                         tasks,
@@ -610,7 +622,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     }
                 },
                 TasksAction::Close { ids, brain } => {
-                    commands::tasks::run::close(&ctx, &ids, brain.as_deref())?;
+                    commands::tasks::run::close(&ctx, &ids, Some(&brain))?;
                 }
                 TasksAction::Ready => {
                     commands::tasks::run::list(

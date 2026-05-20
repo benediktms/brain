@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::json;
 use tracing::debug;
 
@@ -136,16 +136,16 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 
 // ── label add / label remove ────────────────────────────────
 
-fn label_remote(ctx: &TaskCtx, task_id: &str, label: &str, add: bool) -> Result<()> {
+fn label_remote(ctx: &TaskCtx, task_id: &str, label: &str, brain: &str, add: bool) -> Result<()> {
     let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let event_id = if add {
         client
-            .tasks_add_label(task_id.to_string(), label.to_string())
+            .tasks_add_label(task_id.to_string(), label.to_string(), brain.to_string())
             .map_err(|e| anyhow::anyhow!("TasksAddLabel rpc failed: {e}"))?
     } else {
         client
-            .tasks_remove_label(task_id.to_string(), label.to_string())
+            .tasks_remove_label(task_id.to_string(), label.to_string(), brain.to_string())
             .map_err(|e| anyhow::anyhow!("TasksRemoveLabel rpc failed: {e}"))?
     };
 
@@ -175,10 +175,7 @@ pub fn label_add(
     remote: bool,
 ) -> Result<()> {
     if remote {
-        if brain.is_some() {
-            bail!("--brain selector is not yet supported on the --remote path");
-        }
-        return label_remote(ctx, task_id, label, true);
+        return label_remote(ctx, task_id, label, brain.unwrap(), true);
     }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(ctx, target_brain, task_id, label, "label_added", "Added")? {
@@ -228,10 +225,7 @@ pub fn label_remove(
     remote: bool,
 ) -> Result<()> {
     if remote {
-        if brain.is_some() {
-            bail!("--brain selector is not yet supported on the --remote path");
-        }
-        return label_remote(ctx, task_id, label, false);
+        return label_remote(ctx, task_id, label, brain.unwrap(), false);
     }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(

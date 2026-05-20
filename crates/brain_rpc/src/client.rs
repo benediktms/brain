@@ -259,10 +259,12 @@ impl<T: Transport> DaemonClient<T> {
         &mut self,
         task_id: String,
         depends_on_task_id: String,
+        brain: String,
     ) -> Result<String, RpcError> {
         match self.call(Request::TasksAddDep {
             task_id,
             depends_on_task_id,
+            brain,
         })? {
             Response::TasksDepAdded { event_id } => Ok(event_id),
             other => Err(RpcError::Protocol {
@@ -281,10 +283,12 @@ impl<T: Transport> DaemonClient<T> {
         &mut self,
         task_id: String,
         depends_on_task_id: String,
+        brain: String,
     ) -> Result<String, RpcError> {
         match self.call(Request::TasksRemoveDep {
             task_id,
             depends_on_task_id,
+            brain,
         })? {
             Response::TasksDepRemoved { event_id } => Ok(event_id),
             other => Err(RpcError::Protocol {
@@ -301,8 +305,17 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::TasksLabelAdded`].
-    pub fn tasks_add_label(&mut self, task_id: String, label: String) -> Result<String, RpcError> {
-        match self.call(Request::TasksAddLabel { task_id, label })? {
+    pub fn tasks_add_label(
+        &mut self,
+        task_id: String,
+        label: String,
+        brain: String,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksAddLabel {
+            task_id,
+            label,
+            brain,
+        })? {
             Response::TasksLabelAdded { event_id } => Ok(event_id),
             other => Err(RpcError::Protocol {
                 message: format!(
@@ -322,8 +335,13 @@ impl<T: Transport> DaemonClient<T> {
         &mut self,
         task_id: String,
         label: String,
+        brain: String,
     ) -> Result<String, RpcError> {
-        match self.call(Request::TasksRemoveLabel { task_id, label })? {
+        match self.call(Request::TasksRemoveLabel {
+            task_id,
+            label,
+            brain,
+        })? {
             Response::TasksLabelRemoved { event_id } => Ok(event_id),
             other => Err(RpcError::Protocol {
                 message: format!(
@@ -2041,6 +2059,7 @@ mod tests {
 
     fn sample_create_params() -> TasksCreateParams {
         TasksCreateParams {
+            brain: "brn".to_string(),
             title: "new task".into(),
             description: None,
             priority: 2,
@@ -2092,6 +2111,7 @@ mod tests {
 
     fn sample_update_params() -> TasksUpdateParams {
         TasksUpdateParams {
+            brain: "brn".to_string(),
             id: "brn-2fe.27".into(),
             title: Some("renamed".into()),
             description: None,
@@ -2150,6 +2170,7 @@ mod tests {
             }));
         let (task, event_id) = client
             .tasks_mutate(TasksMutateParams {
+                brain: "brn".to_string(),
                 id: "brn-2fe.27".into(),
                 action: "close".into(),
             })
@@ -2163,6 +2184,7 @@ mod tests {
         let mut client =
             DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
         match client.tasks_mutate(TasksMutateParams {
+            brain: "brn".to_string(),
             id: "x".into(),
             action: "close".into(),
         }) {
@@ -2184,7 +2206,7 @@ mod tests {
             _ => panic!("unexpected request: {req:?}"),
         }));
         let event_id = client
-            .tasks_add_dep("a".into(), "b".into())
+            .tasks_add_dep("a".into(), "b".into(), "brn".to_string())
             .expect("tasks_add_dep");
         assert_eq!(event_id, "evt");
     }
@@ -2193,7 +2215,7 @@ mod tests {
     fn tasks_add_dep_returns_protocol_error_on_wrong_response_shape() {
         let mut client =
             DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
-        match client.tasks_add_dep("a".into(), "b".into()) {
+        match client.tasks_add_dep("a".into(), "b".into(), "brn".to_string()) {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("TasksDepAdded"));
             }
@@ -2210,7 +2232,7 @@ mod tests {
             _ => panic!("unexpected request: {req:?}"),
         }));
         let event_id = client
-            .tasks_remove_dep("a".into(), "b".into())
+            .tasks_remove_dep("a".into(), "b".into(), "brn".to_string())
             .expect("tasks_remove_dep");
         assert_eq!(event_id, "evt");
     }
@@ -2219,7 +2241,7 @@ mod tests {
     fn tasks_remove_dep_returns_protocol_error_on_wrong_response_shape() {
         let mut client =
             DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
-        match client.tasks_remove_dep("a".into(), "b".into()) {
+        match client.tasks_remove_dep("a".into(), "b".into(), "brn".to_string()) {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("TasksDepRemoved"));
             }
@@ -2238,7 +2260,7 @@ mod tests {
             _ => panic!("unexpected request: {req:?}"),
         }));
         let event_id = client
-            .tasks_add_label("a".into(), "blocked".into())
+            .tasks_add_label("a".into(), "blocked".into(), "brn".to_string())
             .expect("tasks_add_label");
         assert_eq!(event_id, "evt");
     }
@@ -2247,7 +2269,7 @@ mod tests {
     fn tasks_add_label_returns_protocol_error_on_wrong_response_shape() {
         let mut client =
             DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
-        match client.tasks_add_label("a".into(), "blocked".into()) {
+        match client.tasks_add_label("a".into(), "blocked".into(), "brn".to_string()) {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("TasksLabelAdded"));
             }
@@ -2264,7 +2286,7 @@ mod tests {
             _ => panic!("unexpected request: {req:?}"),
         }));
         let event_id = client
-            .tasks_remove_label("a".into(), "blocked".into())
+            .tasks_remove_label("a".into(), "blocked".into(), "brn".to_string())
             .expect("tasks_remove_label");
         assert_eq!(event_id, "evt");
     }
@@ -2273,7 +2295,7 @@ mod tests {
     fn tasks_remove_label_returns_protocol_error_on_wrong_response_shape() {
         let mut client =
             DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
-        match client.tasks_remove_label("a".into(), "blocked".into()) {
+        match client.tasks_remove_label("a".into(), "blocked".into(), "brn".to_string()) {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("TasksLabelRemoved"));
             }

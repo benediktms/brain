@@ -64,18 +64,32 @@ pub enum Request {
     TasksAddDep {
         task_id: String,
         depends_on_task_id: String,
+        /// Target brain — required for all task mutations.
+        brain: String,
     },
     /// Remove a dependency edge previously added via
     /// [`Request::TasksAddDep`]. Server returns [`Response::TasksDepRemoved`].
     TasksRemoveDep {
         task_id: String,
         depends_on_task_id: String,
+        /// Target brain — required for all task mutations.
+        brain: String,
     },
     /// Add a label to a task. Server returns [`Response::TasksLabelAdded`].
-    TasksAddLabel { task_id: String, label: String },
+    TasksAddLabel {
+        task_id: String,
+        label: String,
+        /// Target brain — required for all task mutations.
+        brain: String,
+    },
     /// Remove a label from a task. Server returns
     /// [`Response::TasksLabelRemoved`].
-    TasksRemoveLabel { task_id: String, label: String },
+    TasksRemoveLabel {
+        task_id: String,
+        label: String,
+        /// Target brain — required for all task mutations.
+        brain: String,
+    },
     /// Transfer a task to a different brain (preserve-ID move). Server
     /// returns [`Response::TasksTransfer`] with the updated summary.
     TasksTransfer { params: TasksTransferParams },
@@ -337,6 +351,8 @@ pub struct TasksCreateParams {
     pub task_type: String,
     pub assignee: Option<String>,
     pub parent: Option<String>,
+    /// Target brain — required for all task mutations.
+    pub brain: String,
 }
 
 /// Wire-format params for [`Request::TasksUpdate`].
@@ -352,6 +368,8 @@ pub struct TasksUpdateParams {
     pub description: Option<String>,
     pub priority: Option<u8>,
     pub assignee: Option<String>,
+    /// Target brain — required for all task mutations.
+    pub brain: String,
 }
 
 /// Wire-format params for [`Request::TasksMutate`].
@@ -364,6 +382,8 @@ pub struct TasksUpdateParams {
 pub struct TasksMutateParams {
     pub id: String,
     pub action: String,
+    /// Target brain — required for all task mutations.
+    pub brain: String,
 }
 
 /// Wire-format params for [`Request::TasksTransfer`].
@@ -2194,6 +2214,7 @@ mod tests {
             task_type: "task".into(),
             assignee: Some("alice".into()),
             parent: None,
+            brain: "brain".into(),
         }
     }
 
@@ -2215,12 +2236,13 @@ mod tests {
                 task_type: "task".into(),
                 assignee: None,
                 parent: None,
+                brain: "brain".into(),
             },
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"tasks_create","params":{"title":"t","description":null,"priority":2,"task_type":"task","assignee":null,"parent":null}}"#
+            r#"{"type":"tasks_create","params":{"title":"t","description":null,"priority":2,"task_type":"task","assignee":null,"parent":null,"brain":"brain"}}"#
         );
     }
 
@@ -2257,6 +2279,7 @@ mod tests {
                 description: None,
                 priority: Some(1),
                 assignee: None,
+                brain: "brain".into(),
             },
         };
         assert_eq!(roundtrip(&req), req);
@@ -2271,12 +2294,13 @@ mod tests {
                 description: None,
                 priority: Some(1),
                 assignee: None,
+                brain: "brain".into(),
             },
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"tasks_update","params":{"id":"brn-2fe.27","title":null,"description":null,"priority":1,"assignee":null}}"#
+            r#"{"type":"tasks_update","params":{"id":"brn-2fe.27","title":null,"description":null,"priority":1,"assignee":null,"brain":"brain"}}"#
         );
     }
 
@@ -2297,6 +2321,7 @@ mod tests {
             params: TasksMutateParams {
                 id: "brn-2fe.27".into(),
                 action: "close".into(),
+                brain: "brain".into(),
             },
         };
         assert_eq!(roundtrip(&req), req);
@@ -2308,12 +2333,13 @@ mod tests {
             params: TasksMutateParams {
                 id: "brn-2fe.27".into(),
                 action: "in_progress".into(),
+                brain: "brain".into(),
             },
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"tasks_mutate","params":{"id":"brn-2fe.27","action":"in_progress"}}"#
+            r#"{"type":"tasks_mutate","params":{"id":"brn-2fe.27","action":"in_progress","brain":"brain"}}"#
         );
     }
 
@@ -2333,6 +2359,7 @@ mod tests {
         let req = Request::TasksAddDep {
             task_id: "brn-2fe.27".into(),
             depends_on_task_id: "brn-2fe.28".into(),
+            brain: "brn".to_string(),
         };
         assert_eq!(roundtrip(&req), req);
     }
@@ -2342,11 +2369,12 @@ mod tests {
         let req = Request::TasksAddDep {
             task_id: "brn-2fe.27".into(),
             depends_on_task_id: "brn-2fe.28".into(),
+            brain: "brn".to_string(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"tasks_add_dep","task_id":"brn-2fe.27","depends_on_task_id":"brn-2fe.28"}"#
+            r#"{"type":"tasks_add_dep","task_id":"brn-2fe.27","depends_on_task_id":"brn-2fe.28","brain":"brn"}"#
         );
     }
 
@@ -2355,6 +2383,7 @@ mod tests {
         let req = Request::TasksRemoveDep {
             task_id: "brn-2fe.27".into(),
             depends_on_task_id: "brn-2fe.28".into(),
+            brain: "brn".to_string(),
         };
         assert_eq!(roundtrip(&req), req);
     }
@@ -2391,6 +2420,7 @@ mod tests {
         let req = Request::TasksAddLabel {
             task_id: "brn-2fe.27".into(),
             label: "blocked".into(),
+            brain: "brn".to_string(),
         };
         assert_eq!(roundtrip(&req), req);
     }
@@ -2400,11 +2430,12 @@ mod tests {
         let req = Request::TasksAddLabel {
             task_id: "brn-2fe.27".into(),
             label: "blocked".into(),
+            brain: "brn".to_string(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"tasks_add_label","task_id":"brn-2fe.27","label":"blocked"}"#
+            r#"{"type":"tasks_add_label","task_id":"brn-2fe.27","label":"blocked","brain":"brn"}"#
         );
     }
 
@@ -2413,6 +2444,7 @@ mod tests {
         let req = Request::TasksRemoveLabel {
             task_id: "brn-2fe.27".into(),
             label: "blocked".into(),
+            brain: "brn".to_string(),
         };
         assert_eq!(roundtrip(&req), req);
     }
