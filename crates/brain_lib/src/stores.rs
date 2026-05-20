@@ -755,17 +755,18 @@ impl BrainStores {
         // resolves to name ".brain"), use brain_data_dir as brain_home and read
         // the brain's own brain.toml from there. This handles the case where
         // brain_home IS the brain's data directory — the TOML there has the
-        // real name, not ".brain".
-        let (resolved_brain_name, resolved_brain_home) = if brain_name.starts_with('.') {
-            #[allow(clippy::unnecessary_to_owned)]
-            if let Ok(toml) = config::load_brain_toml(brain_data_dir) {
-                (toml.name, brain_data_dir.to_path_buf())
+        // real name and id, not ".brain" / empty.
+        let (resolved_brain_name, resolved_brain_home, resolved_brain_id_from_toml) =
+            if brain_name.starts_with('.') {
+                #[allow(clippy::unnecessary_to_owned)]
+                if let Ok(toml) = config::load_brain_toml(brain_data_dir) {
+                    (toml.name, brain_data_dir.to_path_buf(), toml.id)
+                } else {
+                    (brain_name.clone(), brain_home.clone(), None)
+                }
             } else {
-                (brain_name.clone(), brain_home.clone())
-            }
-        } else {
-            (brain_name.clone(), brain_home.clone())
-        };
+                (brain_name.clone(), brain_home.clone(), None)
+            };
 
         // Open the unified DB (~/.brain/brain.db) as the single database.
         // Falls back to the path-local brain.db when the unified DB does not yet exist.
@@ -776,17 +777,20 @@ impl BrainStores {
             Db::open(sqlite_db)?
         };
 
-        // Resolve brain_id: try TOML registry first, then DB (supports
-        // brains registered via the daemon without a TOML entry), then
-        // fall back to empty string for legacy/unscoped mode.
-        let brain_id = if !resolved_brain_name.is_empty() {
-            config::resolve_brain_entry(&resolved_brain_name)
-                .and_then(|(name, entry)| config::resolve_brain_id(&entry, &name))
-                .or_else(|_| db.resolve_brain(&resolved_brain_name).map(|(id, _)| id))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        // Resolve brain_id: prefer TOML id if available (short-circuit), then
+        // fall back to TOML registry → DB → empty for legacy/unscoped mode.
+        let brain_id = resolved_brain_id_from_toml
+            .or_else(|| {
+                if !resolved_brain_name.is_empty() {
+                    config::resolve_brain_entry(&resolved_brain_name)
+                        .and_then(|(name, entry)| config::resolve_brain_id(&entry, &name))
+                        .or_else(|_| db.resolve_brain(&resolved_brain_name).map(|(id, _)| id))
+                        .ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
 
         Self::build(
             db,
