@@ -788,7 +788,13 @@ impl BrainStores {
             String::new()
         };
 
-        Self::build(db, brain_id, resolved_brain_name, brain_data_dir, resolved_brain_home)
+        Self::build(
+            db,
+            brain_id,
+            resolved_brain_name,
+            brain_data_dir,
+            resolved_brain_home,
+        )
     }
 
     /// Build all stores from a resolved Db handle and paths.
@@ -1000,7 +1006,11 @@ mod tests {
 
         // Write brain.toml at brain_home — this is the daemon's own brain config.
         let brain_toml = dot_brain.join("brain.toml");
-        std::fs::write(&brain_toml, "name = \"daemon-brain\"\nid = \"daemon01\"\nprefix = \"DAE\"\n").unwrap();
+        std::fs::write(
+            &brain_toml,
+            "name = \"daemon-brain\"\nid = \"daemon01\"\nprefix = \"DAE\"\n",
+        )
+        .unwrap();
 
         let sqlite_db = dot_brain.join("brain.db");
         let db = Db::open(&sqlite_db).unwrap();

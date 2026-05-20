@@ -1417,8 +1417,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot write episode: daemon is not scoped to a brain"
-                    .into(),
+                message: "cannot write episode: daemon is not scoped to a brain".into(),
             });
         }
         // Delegate to brain_memory so the `continues` predecessor is
@@ -1461,8 +1460,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot write procedure: daemon is not scoped to a brain"
-                    .into(),
+                message: "cannot write procedure: daemon is not scoped to a brain".into(),
             });
         }
         let importance = millis_to_unit(params.importance_millis);
@@ -1711,8 +1709,7 @@ impl BrainStoresDispatcher {
     fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
         if params.commit && self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot commit reflection: daemon is not scoped to a brain"
-                    .into(),
+                message: "cannot commit reflection: daemon is not scoped to a brain".into(),
             });
         }
         let search_layer = self.search_layer()?;
@@ -2446,8 +2443,7 @@ impl BrainStoresDispatcher {
     ) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot apply task event: daemon is not scoped to a brain"
-                    .into(),
+                message: "cannot apply task event: daemon is not scoped to a brain".into(),
             });
         }
         // Mirrors `brain_lib::mcp::tools::task_apply_event::{Params,
@@ -2887,8 +2883,7 @@ impl BrainStoresDispatcher {
     fn handle_tags_recluster(&self, params: TagsReclusterParams) -> Result<Response, RpcError> {
         if self.stores.brain_id.is_empty() {
             return Err(RpcError::Protocol {
-                message: "cannot recluster tags: daemon is not scoped to a brain"
-                    .into(),
+                message: "cannot recluster tags: daemon is not scoped to a brain".into(),
             });
         }
         // Mirrors `brain_lib::mcp::tools::tags_recluster::Params` — accepts
