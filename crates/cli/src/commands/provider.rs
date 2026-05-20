@@ -141,7 +141,7 @@ pub fn run_remove(
         client
             .provider_remove(target)
             .map_err(|e| anyhow::anyhow!("ProviderRemove rpc failed: {e}"))?;
-        println!("Removed all providers named '{target}'");
+        println!("Removed provider(s) matching '{target}'");
         return Ok(());
     }
 
