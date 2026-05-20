@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3] - 2026-05-20
+
+### Bug Fixes
+
+- Handle RpcError responses in UnixSocketTransport (#181)
+- Restore GH_TOKEN that dist plan requires
+- Address final CodeRabbit review comments
+- Address CodeRabbit review comments
+- Address review comments + regenerate release.yml
+- Handle RpcError responses in UnixSocketTransport
+- Detect daemon via socket when PID file missing; prevent dual daemon spawn (#180)
+- Detect daemon via socket when PID file missing; prevent dual daemon spawn
+- Resolve brain_id from TOML for daemon's default path; add defensive empty guards (#179)
+- Use scoped brain in smoke test to match new guard
+- Use toml.id for short-circuit brain_id resolution
+- Remove needless borrow in from_path
+- Resolve brain_id from TOML for daemon's default path; add defensive empty guards
+- Use target-agnostic wording for remote provider_remove
+- Validate provider name before stdin prompt; fix remove message
+- Redact api_key in Debug impl; allow stdin prompt for remote
+- Remove needless borrow in provider_set call
+- Address CodeRabbit review comments on PR #178
+- Resolve brain_id from DB when TOML lookup fails in from_path_inner (#177)
+- Resolve brain_id from DB when TOML lookup fails in from_path_inner
+
+### Features
+
+- Add missing RPC methods — JobsRetry, JobsGc, ProviderSet, ProviderRemove (#178)
+- Add missing RPC methods — JobsRetry, JobsGc, ProviderSet, ProviderRemove
+
 ## [0.4.2] - 2026-05-19
 
 ### Bug Fixes
