@@ -68,14 +68,6 @@ impl BrainStores {
             (data_dir, name)
         };
 
-        // Hidden directories (e.g. ".brain" from ~/.brain/) are BRAIN_HOME
-        // paths, not brain project names — treat them as unscoped.
-        let brain_name = if brain_name.starts_with('.') {
-            String::new()
-        } else {
-            brain_name
-        };
-
         Self::from_path_inner(sqlite_db, &brain_data_dir, &brain_name, None)
     }
 
@@ -759,9 +751,25 @@ impl BrainStores {
             config::brain_home().unwrap_or_else(|_| brain_data_dir.to_path_buf())
         };
 
+        // When the path-derived name is a dot-prefixed directory (e.g. "~/.brain/"
+        // resolves to name ".brain"), use brain_data_dir as brain_home and read
+        // the brain's own brain.toml from there. This handles the case where
+        // brain_home IS the brain's data directory — the TOML there has the
+        // real name, not ".brain".
+        let (resolved_brain_name, resolved_brain_home) = if brain_name.starts_with('.') {
+            #[allow(clippy::unnecessary_to_owned)]
+            if let Ok(toml) = config::load_brain_toml(&brain_data_dir) {
+                (toml.name, brain_data_dir.to_path_buf())
+            } else {
+                (brain_name.clone(), brain_home.clone())
+            }
+        } else {
+            (brain_name.clone(), brain_home.clone())
+        };
+
         // Open the unified DB (~/.brain/brain.db) as the single database.
         // Falls back to the path-local brain.db when the unified DB does not yet exist.
-        let unified_db_path = brain_home.join("brain.db");
+        let unified_db_path = resolved_brain_home.join("brain.db");
         let db = if unified_db_path.exists() {
             Db::open(&unified_db_path)?
         } else {
@@ -771,16 +779,16 @@ impl BrainStores {
         // Resolve brain_id: try TOML registry first, then DB (supports
         // brains registered via the daemon without a TOML entry), then
         // fall back to empty string for legacy/unscoped mode.
-        let brain_id = if !brain_name.is_empty() {
-            config::resolve_brain_entry(&brain_name)
+        let brain_id = if !resolved_brain_name.is_empty() {
+            config::resolve_brain_entry(&resolved_brain_name)
                 .and_then(|(name, entry)| config::resolve_brain_id(&entry, &name))
-                .or_else(|_| db.resolve_brain(&brain_name).map(|(id, _)| id))
+                .or_else(|_| db.resolve_brain(&resolved_brain_name).map(|(id, _)| id))
                 .unwrap_or_default()
         } else {
             String::new()
         };
 
-        Self::build(db, brain_id, brain_name, brain_data_dir, brain_home)
+        Self::build(db, brain_id, resolved_brain_name, brain_data_dir, resolved_brain_home)
     }
 
     /// Build all stores from a resolved Db handle and paths.
@@ -982,25 +990,43 @@ mod tests {
     }
 
     #[test]
-    fn from_path_rejects_dotfile_brain_name() {
+    fn from_path_resolves_brain_name_from_home_toml_when_dot_prefixed() {
         // Simulates ~/.brain/lancedb where parent is ~/.brain — the directory
-        // name ".brain" should not become a brain_name.
+        // name ".brain" is dot-prefixed. When brain_home/brain.toml exists,
+        // from_path reads the real brain name from it instead of using ".brain".
         let tmp = TempDir::new().unwrap();
         let dot_brain = tmp.path().join(".brain");
-        std::fs::create_dir_all(dot_brain.join("brains").join(".brain")).unwrap();
+        std::fs::create_dir_all(&dot_brain).unwrap();
+
+        // Write brain.toml at brain_home — this is the daemon's own brain config.
+        let brain_toml = dot_brain.join("brain.toml");
+        std::fs::write(&brain_toml, "name = \"daemon-brain\"\nid = \"daemon01\"\nprefix = \"DAE\"\n").unwrap();
 
         let sqlite_db = dot_brain.join("brain.db");
-        Db::open(&sqlite_db).unwrap();
+        let db = Db::open(&sqlite_db).unwrap();
+
+        // Register the brain in the DB so resolve_brain lookup succeeds.
+        db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+            brain_id: "daemon01",
+            name: "daemon-brain",
+            prefix: "DAE",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
 
         let lance_db = dot_brain.join("lancedb");
         std::fs::create_dir_all(&lance_db).unwrap();
 
         let stores = BrainStores::from_path(&sqlite_db, Some(&lance_db)).unwrap();
-        assert!(
-            stores.brain_name.is_empty(),
-            "dotfile directory name should not become brain_name, got: {:?}",
-            stores.brain_name
+        // brain_name should resolve to "daemon-brain" from the TOML, not ".brain".
+        assert_eq!(
+            stores.brain_name, "daemon-brain",
+            "brain_name should be resolved from brain.toml when dot-prefixed"
         );
+        assert_eq!(stores.brain_id, "daemon01");
     }
 
     #[test]

@@ -292,6 +292,11 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_create(&self, params: TasksCreateParams) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot create task: daemon is not scoped to a brain (brain_id is empty)".into(),
+            });
+        }
         if params.priority > 4 {
             return Err(RpcError::Protocol {
                 message: format!("invalid priority: {} (must be 0..=4)", params.priority),
@@ -373,6 +378,11 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_update(&self, params: TasksUpdateParams) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot update task: daemon is not scoped to a brain".into(),
+            });
+        }
         if params.priority.is_some_and(|p| p > 4) {
             return Err(RpcError::Protocol {
                 message: format!(
@@ -429,6 +439,11 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_mutate(&self, params: TasksMutateParams) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot mutate task: daemon is not scoped to a brain".into(),
+            });
+        }
         let new_status = match params.action.as_str() {
             "close" => TaskStatus::Done,
             "open" => TaskStatus::Open,
@@ -483,6 +498,11 @@ impl BrainStoresDispatcher {
         task_id: String,
         depends_on_task_id: String,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot add dependency: daemon is not scoped to a brain".into(),
+            });
+        }
         let task_resolved =
             self.stores
                 .tasks
@@ -523,6 +543,11 @@ impl BrainStoresDispatcher {
         task_id: String,
         depends_on_task_id: String,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot remove dependency: daemon is not scoped to a brain".into(),
+            });
+        }
         let task_resolved =
             self.stores
                 .tasks
@@ -559,6 +584,11 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_add_label(&self, task_id: String, label: String) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot add label: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved =
             self.stores
                 .tasks
@@ -590,6 +620,11 @@ impl BrainStoresDispatcher {
         task_id: String,
         label: String,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot remove label: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved =
             self.stores
                 .tasks
@@ -767,6 +802,11 @@ impl BrainStoresDispatcher {
 
     fn handle_analyses_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
         let brain = params.brain.clone();
+        if self.stores.brain_id.is_empty() && brain.as_deref().is_none() {
+            return Err(RpcError::Protocol {
+                message: "cannot create analysis: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved_store = self.scoped_record_store(brain.as_deref())?;
         let target_records: &RecordStore = resolved_store
             .as_ref()
@@ -842,6 +882,11 @@ impl BrainStoresDispatcher {
 
     fn handle_documents_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
         let brain = params.brain.clone();
+        if self.stores.brain_id.is_empty() && brain.as_deref().is_none() {
+            return Err(RpcError::Protocol {
+                message: "cannot create document: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved_store = self.scoped_record_store(brain.as_deref())?;
         let target_records: &RecordStore = resolved_store
             .as_ref()
@@ -882,6 +927,11 @@ impl BrainStoresDispatcher {
 
     fn handle_plans_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
         let brain = params.brain.clone();
+        if self.stores.brain_id.is_empty() && brain.as_deref().is_none() {
+            return Err(RpcError::Protocol {
+                message: "cannot create plan: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved_store = self.scoped_record_store(brain.as_deref())?;
         let target_records: &RecordStore = resolved_store
             .as_ref()
@@ -925,6 +975,11 @@ impl BrainStoresDispatcher {
 
     fn handle_snapshots_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
         let brain = params.brain.clone();
+        if self.stores.brain_id.is_empty() && brain.as_deref().is_none() {
+            return Err(RpcError::Protocol {
+                message: "cannot create snapshot: daemon is not scoped to a brain".into(),
+            });
+        }
         let resolved_store = self.scoped_record_store(brain.as_deref())?;
         let target_records: &RecordStore = resolved_store
             .as_ref()
@@ -1360,6 +1415,12 @@ impl BrainStoresDispatcher {
         &self,
         params: MemoryWriteEpisodeParams,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot write episode: daemon is not scoped to a brain (brain_id is empty)"
+                    .into(),
+            });
+        }
         // Delegate to brain_memory so the `continues` predecessor is
         // validated pre-write (exists / same brain / kind=episode)
         // with legacy-byte-identical error messages. Validation
@@ -1398,6 +1459,12 @@ impl BrainStoresDispatcher {
         &self,
         params: MemoryWriteProcedureParams,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot write procedure: daemon is not scoped to a brain (brain_id is empty)"
+                    .into(),
+            });
+        }
         let importance = millis_to_unit(params.importance_millis);
         let summary_id = self
             .stores
@@ -1642,6 +1709,12 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
+        if params.commit && self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot commit reflection: daemon is not scoped to a brain (brain_id is empty)"
+                    .into(),
+            });
+        }
         let search_layer = self.search_layer()?;
         let metrics = self.metrics()?;
         let semantic_ctx = brain_memory::context::SemanticContext {
@@ -2371,6 +2444,12 @@ impl BrainStoresDispatcher {
         &self,
         params: TasksApplyEventParams,
     ) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot apply task event: daemon is not scoped to a brain (brain_id is empty)"
+                    .into(),
+            });
+        }
         // Mirrors `brain_lib::mcp::tools::task_apply_event::{Params,
         // parse_and_validate_event, execute_inner}` — the daemon owns
         // every step now: pure validation, archive-gate, ID resolution,
@@ -2806,6 +2885,12 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tags_recluster(&self, params: TagsReclusterParams) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot recluster tags: daemon is not scoped to a brain (brain_id is empty)"
+                    .into(),
+            });
+        }
         // Mirrors `brain_lib::mcp::tools::tags_recluster::Params` — accepts
         // an opaque JSON body to avoid mirroring the MCP tool's input
         // schema in the wire protocol.
@@ -4439,6 +4524,18 @@ mod tests {
         (tmp, dispatcher)
     }
 
+    fn dispatcher_with_scoped_store() -> (tempfile::TempDir, BrainStoresDispatcher) {
+        let (tmp, stores) = BrainStores::in_memory().expect("in_memory stores");
+        let scoped = stores
+            .with_brain_id("test-brain", "test-brain")
+            .expect("with_brain_id");
+        #[cfg(feature = "embed")]
+        let dispatcher = BrainStoresDispatcher::new(scoped, None);
+        #[cfg(not(feature = "embed"))]
+        let dispatcher = BrainStoresDispatcher::new(scoped);
+        (tmp, dispatcher)
+    }
+
     #[test]
     fn dispatch_ping_returns_pong() {
         let (_tmp, d) = dispatcher_with_empty_store();
@@ -4521,7 +4618,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_mutate_rejects_unknown_action() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksMutate {
             params: TasksMutateParams {
                 id: "x".into(),
@@ -4541,7 +4638,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_create_rejects_invalid_task_type() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksCreate {
             params: TasksCreateParams {
                 title: "t".into(),
@@ -4562,7 +4659,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_update_returns_not_found_for_missing_task() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksUpdate {
             params: TasksUpdateParams {
                 id: "no-such-task".into(),
@@ -4580,7 +4677,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_add_dep_returns_not_found_for_missing_task() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksAddDep {
             task_id: "missing-a".into(),
             depends_on_task_id: "missing-b".into(),
@@ -4593,7 +4690,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_add_label_returns_not_found_for_missing_task() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksAddLabel {
             task_id: "missing".into(),
             label: "blocked".into(),
@@ -4606,7 +4703,7 @@ mod tests {
 
     #[test]
     fn dispatch_tasks_remove_label_returns_not_found_for_missing_task() {
-        let (_tmp, d) = dispatcher_with_empty_store();
+        let (_tmp, d) = dispatcher_with_scoped_store();
         let res = d.dispatch(Request::TasksRemoveLabel {
             task_id: "missing".into(),
             label: "blocked".into(),
