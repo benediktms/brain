@@ -1,0 +1,31 @@
+name: Dispatch homebrew-brain formula bump
+
+# Fire a repository_dispatch to homebrew-brain when a GitHub Release is published.
+# homebrew-brain's bump.yml receives this, runs brew bump-formula-pr to update
+# the formula version + SHA256, and auto-merges the PR.
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_REF: ${{ github.ref }}
+
+      - name: Trigger homebrew-brain bump
+        run: |
+          echo "Dispatching brain-released for version ${VERSION}"
+          gh api repos/benediktms/homebrew-brain/dispatches \
+            --field event_type=brain-released \
+            --field "client_payload={\"version\": \"${VERSION}\"}"
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}

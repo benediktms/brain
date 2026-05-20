@@ -73,11 +73,14 @@ impl Transport for UnixSocketTransport {
         //   - RpcError  → {"kind":"…", …}   (uses `kind` as the enum tag)
         //   - Response  → {"type":"…", …}   (uses `type`  as the enum tag)
         //
-        // Both use adjacent tag field names (5 bytes: `{"k` vs `{"t`), so a
+        // Both use adjacent tag field names (6 bytes: `{"kind` vs `{"type`), so a
         // single byte prefix check is enough to dispatch without a full parse.
-        if response_bytes.len() >= 5 && response_bytes[0..5] == *b"{\"kind" {
-            return serde_json::from_slice(&response_bytes)
-                .map_err(|e| RpcError::Protocol { message: format!("deserialize error: {e}") });
+        if response_bytes.len() >= 6 && response_bytes[0..6] == *b"{\"kind" {
+            let rpc_err: RpcError =
+                serde_json::from_slice(&response_bytes).map_err(|e| RpcError::Protocol {
+                    message: format!("deserialize error: {e}"),
+                })?;
+            return Err(rpc_err);
         }
 
         serde_json::from_slice(&response_bytes).map_err(|e| RpcError::Protocol {
