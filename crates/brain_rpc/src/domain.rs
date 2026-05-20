@@ -1240,10 +1240,19 @@ pub struct JobsGcParams {
 }
 
 /// Params for [`Request::ProviderSet`].
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ProviderSetParams {
     pub name: String,
     pub api_key: String,
+}
+
+impl std::fmt::Debug for ProviderSetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderSetParams")
+            .field("name", &self.name)
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Params for [`Request::ProviderRemove`].

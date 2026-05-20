@@ -1,4 +1,23 @@
 use std::io::{self, BufRead, Write};
+
+/// Resolve an API key — from argument or stdin prompt.
+fn get_api_key(name: &str, api_key: Option<&str>) -> Result<String> {
+    match api_key {
+        Some(k) if !k.trim().is_empty() => Ok(k.trim().to_string()),
+        Some(_) => anyhow::bail!("API key cannot be empty"),
+        None => {
+            eprint!("Enter API key for {name}: ");
+            io::stderr().flush()?;
+            let mut line = String::new();
+            io::stdin().lock().read_line(&mut line)?;
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() {
+                anyhow::bail!("API key cannot be empty");
+            }
+            Ok(trimmed)
+        }
+    }
+}
 use std::path::Path;
 
 use anyhow::Result;
@@ -20,18 +39,10 @@ pub fn run_set(
     remote: bool,
 ) -> Result<()> {
     if remote {
-        // API key is required over RPC (no stdin prompt available)
-        let key = api_key.ok_or_else(|| {
-            anyhow::anyhow!(
-                "API key required for remote provider set; \
-                 pass it as a positional argument: brain config provider set {} <api-key>",
-                name
-            )
-        })?;
-
         let mut client = rpc_client::connect_daemon()?;
+        let key = get_api_key(name, api_key)?;
         let id = client
-            .provider_set(name, key)
+            .provider_set(name, &key)
             .map_err(|e| anyhow::anyhow!("ProviderSet rpc failed: {e}"))?;
         println!("Provider '{name}' configured (id: {id})");
         return Ok(());
@@ -46,21 +57,7 @@ pub fn run_set(
         );
     }
 
-    // Get or prompt for the API key
-    let key = match api_key {
-        Some(k) => k.to_string(),
-        None => {
-            eprint!("Enter API key for {name}: ");
-            io::stderr().flush()?;
-            let mut line = String::new();
-            io::stdin().lock().read_line(&mut line)?;
-            let trimmed = line.trim().to_string();
-            if trimmed.is_empty() {
-                anyhow::bail!("API key cannot be empty");
-            }
-            trimmed
-        }
-    };
+    let key = get_api_key(name, api_key)?;
 
     let home = brain_home()?;
     let master_key = crypto::load_or_create_master_key(&home)?;
