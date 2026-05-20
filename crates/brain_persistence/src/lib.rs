@@ -10,3 +10,5 @@ pub mod store;
 pub(crate) mod tokens;
 pub mod trust;
 pub(crate) mod utils;
+
+pub use db::tasks::queries::TaskResolutionResult;

@@ -65,7 +65,8 @@ fn show_remote(ctx: &TaskCtx, params: &ShowParams) -> Result<()> {
 }
 
 fn show_local(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
-    let id = ctx.store.resolve_task_id(id)?;
+    let resolved = ctx.store.resolve_task_id(id)?;
+    let id = resolved.task_id;
     let task = ctx
         .store
         .get_task(&id)?

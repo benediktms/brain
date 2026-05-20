@@ -40,8 +40,8 @@ pub use events::{
     append_status_changed_event, append_task_event_log, append_task_transferred_event,
 };
 pub use external_ids::{
-    ExternalBlockerResolveOutcome, add_external_blocker, add_external_id, remove_external_id,
-    resolve_external_blocker,
+    ExternalBlockerResolveOutcome, add_external_blocker, add_external_id,
+    remove_external_id, resolve_external_blocker,
 };
 pub use labels::{add_label, remove_label};
 pub use notes::{link_note, unlink_note};

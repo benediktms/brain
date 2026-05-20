@@ -54,7 +54,8 @@ pub async fn transfer(
         return transfer_remote(ctx, &params).await;
     }
     // Resolve the source task ID (may be a short prefix).
-    let task_id = ctx.store.resolve_task_id(&params.task_id)?;
+    let resolved = ctx.store.resolve_task_id(&params.task_id)?;
+    let task_id = resolved.task_id;
 
     // Resolve the target brain.
     let (target_brain_id, target_brain_name) = ctx.store.resolve_brain(&params.to)?;

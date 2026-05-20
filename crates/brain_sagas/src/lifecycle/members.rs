@@ -87,12 +87,12 @@ pub fn add_tasks(
     // Resolve all input IDs first — bad IDs fail-fast before any writes.
     let mut seeds: Vec<String> = Vec::with_capacity(task_ids.len());
     for raw_id in task_ids {
-        let full_id = resolve_task_id_scoped(&tx, raw_id, None).map_err(|e| {
+        let result = resolve_task_id_scoped(&tx, raw_id, None).map_err(|e| {
             SqlError::Domain(BrainCoreError::TaskEvent(format!(
                 "task '{raw_id}' could not be resolved: {e}"
             )))
         })?;
-        seeds.push(full_id);
+        seeds.push(result.task_id);
     }
 
     // When `cascade` is true, expand each input to itself plus every
@@ -223,18 +223,22 @@ pub fn remove_tasks(
     let seeds: Vec<String> = if cascade {
         let mut out = Vec::with_capacity(task_ids.len());
         for raw in &task_ids {
-            let full = resolve_task_id_scoped(&tx, raw, None).map_err(|e| {
+            let result = resolve_task_id_scoped(&tx, raw, None).map_err(|e| {
                 SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task '{raw}' could not be resolved (cascade=true requires resolvable seeds): {e}"
                 )))
             })?;
-            out.push(full);
+            out.push(result.task_id);
         }
         out
     } else {
         task_ids
             .iter()
-            .map(|raw| resolve_task_id_scoped(&tx, raw, None).unwrap_or_else(|_| raw.clone()))
+            .map(|raw| {
+                resolve_task_id_scoped(&tx, raw, None)
+                    .map(|r| r.task_id)
+                    .unwrap_or_else(|_| raw.clone())
+            })
             .collect()
     };
 

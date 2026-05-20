@@ -27,8 +27,9 @@ pub(crate) use state_changes::{cancel, close, reopen, start};
 ///   closed    → open        (reopen)
 ///   cancelled → open        (reopen)
 ///
-/// Cancel from `closed` is rejected — spec says "cancel any *active* status".
-/// Use `reopen` first if you need to flip a closed saga to cancelled.
+/// Note: `closed → cancelled` is intentionally absent. Once closed, a saga
+/// must be reopened before it can be cancelled (spec: cancel is for "any active
+/// status", and `closed` is not active).
 pub fn validate_transition(from: SagaStatus, to: SagaStatus) -> Result<()> {
     use SagaStatus::*;
     match (from, to) {
