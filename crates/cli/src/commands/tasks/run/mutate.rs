@@ -104,7 +104,8 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
     if params.remote {
         return update_remote(ctx, &params);
     }
-    params.id = ctx.store.resolve_task_id(&params.id)?;
+    let resolved = ctx.store.resolve_task_id(&params.id)?;
+    params.id = resolved.task_id;
     let display_id = ctx.store.compact_id_or_raw(&params.id);
     let has_status = params.status.is_some();
     let has_field_updates = params.title.is_some()
@@ -169,7 +170,8 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
     let mut all_unblocked = Vec::new();
 
     for raw_id in ids {
-        let id = ctx.store.resolve_task_id(raw_id)?;
+        let resolved = ctx.store.resolve_task_id(raw_id)?;
+        let id = resolved.task_id;
         let display_id = ctx.store.compact_id_or_raw(&id);
         let event = TaskEvent::from_payload(
             &id,
@@ -266,8 +268,9 @@ pub fn stats(ctx: &TaskCtx) -> Result<()> {
 // ── link / unlink ───────────────────────────────────────────
 
 pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -294,8 +297,9 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
 }
 
 pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -330,8 +334,9 @@ pub fn ext_link_add(
     id: &str,
     url: Option<&str>,
 ) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -362,8 +367,9 @@ pub fn ext_link_add(
 }
 
 pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -393,9 +399,10 @@ pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> 
 }
 
 pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
-    let refs = ctx.store.get_external_ids(task_id)?;
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
+    let refs = ctx.store.get_external_ids(&task_id)?;
 
     if ctx.output.is_json_mode() {
         let out: Vec<serde_json::Value> = refs
@@ -427,8 +434,9 @@ pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
 // ── comment ─────────────────────────────────────────────────
 
 pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::from_payload(
         task_id.as_str(),
         "cli",

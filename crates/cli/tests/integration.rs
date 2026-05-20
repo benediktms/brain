@@ -673,7 +673,7 @@ fn tasks_list_empty_succeeds() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "list"])
+        .args(["tasks", "--brain", "test-brain", "list"])
         .assert()
         .success();
 }
@@ -689,7 +689,14 @@ fn tasks_create_and_list() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "create", "--title", "My test task"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "My test task",
+        ])
         .assert()
         .success();
 
@@ -698,7 +705,7 @@ fn tasks_create_and_list() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "list"])
+        .args(["tasks", "--brain", "test-brain", "list"])
         .assert()
         .success()
         .stdout(predicate::str::contains("My test task"));
@@ -730,7 +737,14 @@ fn tasks_json_output_is_valid() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "create", "--title", "JSON task"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "JSON task",
+        ])
         .assert()
         .success();
 
@@ -739,7 +753,7 @@ fn tasks_json_output_is_valid() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "--json", "list"])
+        .args(["tasks", "--json", "--brain", "test-brain", "list"])
         .output()
         .unwrap();
 
@@ -964,7 +978,7 @@ fn tasks_list_without_db_fails_gracefully() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(home.path().join("nonexistent").join("brain.db"))
-        .args(["tasks", "list"])
+        .args(["tasks", "--brain", "test-brain", "list"])
         .assert()
         .failure();
 }
@@ -992,7 +1006,14 @@ fn tasks_route_through_unified_db() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&per_brain_db)
-        .args(["tasks", "create", "--title", "Unified routing test"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "Unified routing test",
+        ])
         .assert()
         .success();
 
@@ -1001,7 +1022,7 @@ fn tasks_route_through_unified_db() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&per_brain_db)
-        .args(["tasks", "list"])
+        .args(["tasks", "--brain", "test-brain", "list"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Unified routing test"));
@@ -1132,7 +1153,14 @@ fn task_prefix_uses_brain_db() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db_path)
-        .args(["tasks", "create", "--title", "Prefix test"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "Prefix test",
+        ])
         .output()
         .unwrap();
 
@@ -1171,7 +1199,15 @@ fn task_prefix_json_uses_brain_db() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db_path)
-        .args(["tasks", "--json", "create", "--title", "JSON prefix test"])
+        .args([
+            "tasks",
+            "--json",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "JSON prefix test",
+        ])
         .output()
         .unwrap();
 
@@ -1243,7 +1279,14 @@ fn tasks_orphan_dep_not_in_ready_list() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "create", "--title", "Orphan dep task"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "Orphan dep task",
+        ])
         .output()
         .unwrap();
     assert!(create_out.status.success(), "task create should succeed");
@@ -1323,7 +1366,14 @@ fn tasks_external_blocker_excluded_from_ready_and_shown_on_get() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "create", "--title", "Awaits external sign-off"])
+        .args([
+            "tasks",
+            "create",
+            "--brain",
+            "test-brain",
+            "--title",
+            "Awaits external sign-off",
+        ])
         .output()
         .unwrap();
     assert!(create_out.status.success(), "task create should succeed");
@@ -1368,7 +1418,7 @@ fn tasks_external_blocker_excluded_from_ready_and_shown_on_get() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
-        .args(["tasks", "show", &task_id])
+        .args(["tasks", "show", "--brain", "test-brain", &task_id])
         .assert()
         .success()
         .stdout(predicate::str::contains("PLAT-42"))

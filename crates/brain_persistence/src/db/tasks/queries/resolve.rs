@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension};
 
 use super::listing::{get_task, task_exists};
+use super::{MatchSource, TaskResolutionResult};
 use crate::db::meta;
 use crate::error::BrainCoreError;
 use crate::sql::{SqlError, SqlResult};
@@ -34,7 +35,7 @@ pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> SqlResult<i64>
     Ok(max.unwrap_or(0) + 1)
 }
 
-pub fn resolve_task_id(conn: &Connection, input: &str) -> SqlResult<String> {
+pub fn resolve_task_id(conn: &Connection, input: &str) -> SqlResult<TaskResolutionResult> {
     resolve_task_id_scoped(conn, input, None)
 }
 
@@ -81,10 +82,16 @@ pub fn resolve_task_id_scoped(
     conn: &Connection,
     input: &str,
     brain_id: Option<&str>,
-) -> SqlResult<String> {
+) -> SqlResult<TaskResolutionResult> {
     // Fast path: exact match
+
+    // Fast path: exact match on tasks table
     if task_exists(conn, input)? {
-        return Ok(input.to_string());
+        return Ok(TaskResolutionResult {
+            task_id: input.to_string(),
+            match_source: MatchSource::Live,
+            redirected_from: None,
+        });
     }
 
     // Defense-in-depth: if the input has a prefix like "ckt-ebd", derive
@@ -109,19 +116,24 @@ pub fn resolve_task_id_scoped(
         let seq_part = &input[dot_pos + 1..];
         if let Ok(seq) = seq_part.parse::<i64>() {
             // Resolve the parent prefix first (recursive)
-            if let Ok(parent_id) = resolve_task_id_scoped(conn, parent_part, effective_brain_id) {
+            if let Ok(parent_result) = resolve_task_id_scoped(conn, parent_part, effective_brain_id)
+            {
                 let child: Option<String> = conn
                     .query_row(
                         "SELECT t.task_id FROM tasks t
                          JOIN entity_links el ON el.to_id = t.task_id
                          WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='parent_of'
                            AND el.from_id = ?1 AND t.child_seq = ?2",
-                        rusqlite::params![parent_id, seq],
+                        rusqlite::params![parent_result.task_id, seq],
                         |row| row.get(0),
                     )
                     .optional()?;
                 if let Some(child_id) = child {
-                    return Ok(child_id);
+                    return Ok(TaskResolutionResult {
+                        task_id: child_id,
+                        match_source: MatchSource::Live,
+                        redirected_from: None,
+                    });
                 }
             }
         }
@@ -164,7 +176,14 @@ pub fn resolve_task_id_scoped(
                 }
             };
             match exact_matches.len() {
-                1 => return Ok(exact_matches.into_iter().next().unwrap().0),
+                1 => {
+                    let (task_id, _) = exact_matches.into_iter().next().unwrap();
+                    return Ok(TaskResolutionResult {
+                        task_id,
+                        match_source: MatchSource::Live,
+                        redirected_from: None,
+                    });
+                }
                 n if n > 1 => {
                     let candidates: Vec<String> = exact_matches
                         .iter()
@@ -201,7 +220,14 @@ pub fn resolve_task_id_scoped(
             };
 
             match matches.len() {
-                1 => return Ok(matches.into_iter().next().unwrap().0),
+                1 => {
+                    let (task_id, _) = matches.into_iter().next().unwrap();
+                    return Ok(TaskResolutionResult {
+                        task_id,
+                        match_source: MatchSource::Live,
+                        redirected_from: None,
+                    });
+                }
                 n if n > 1 => {
                     let candidates: Vec<String> = matches
                         .iter()
@@ -274,10 +300,36 @@ pub fn resolve_task_id_scoped(
     };
 
     match matches.len() {
-        0 => Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
-            "no task found matching prefix: {input}"
-        )))),
-        1 => Ok(matches.into_iter().next().unwrap().0),
+        0 => {
+            // Final fallback: search task_aliases (task_external_ids) for any source.
+            // This handles previous-ID aliases (source='previous') as well as
+            // any other external ID that was written before this feature existed.
+            let alias_row: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT task_id, external_id FROM task_external_ids WHERE external_id = ?1 LIMIT 1",
+                    [input],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((aliased_task_id, external_id)) = alias_row {
+                return Ok(TaskResolutionResult {
+                    task_id: aliased_task_id,
+                    match_source: MatchSource::Alias,
+                    redirected_from: Some(external_id),
+                });
+            }
+            Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                "no task found matching prefix: {input}"
+            ))))
+        }
+        1 => {
+            let (task_id, _) = matches.into_iter().next().unwrap();
+            Ok(TaskResolutionResult {
+                task_id,
+                match_source: MatchSource::Live,
+                redirected_from: None,
+            })
+        }
         n => {
             let candidates: Vec<String> = matches
                 .iter()
@@ -342,10 +394,16 @@ pub fn compact_id(conn: &Connection, task_id: &str) -> SqlResult<String> {
         None => return Ok(task_id.to_string()),
     };
 
-    // Dot notation for any child with parent + child_seq
-    if let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq) {
-        let parent_compact = compact_id(conn, parent_id)?;
-        return Ok(format!("{parent_compact}.{seq}"));
+    // Dot notation for any child with parent + child_seq.
+    // Use the child's own brain prefix (via short_id_display), not the
+    // parent's compact form — a child in a different brain than its parent
+    // must not inherit the parent's brain prefix (brn-6710).
+    if let (Some(_parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq)
+        && let Some(child_display) = short_id_display(conn, task_id)?
+    {
+        return Ok(format!("{child_display}.{seq}"));
+        // No hash-based display_id: fall through to ULID prefix computation.
+        // (We don't recurse to parent since that would give the wrong prefix.)
     }
 
     // Try hash-based short ID
@@ -429,32 +487,26 @@ pub fn compact_ids(conn: &Connection) -> SqlResult<HashMap<String, String>> {
         }
     }
 
-    // Apply dot notation for all children with a parent_of edge + child_seq.
+    // Apply dot notation for children using their own pre-computed display ID.
+    // Each child has its own brain prefix already stored in `result` from the
+    // hash-based ID pass (or ULID fallback pass). We use that directly rather
+    // than chaining through parent_compact — which would give grandchildren the
+    // grandparent's brain prefix when brains differ (brn-6710).
     let mut child_stmt = conn.prepare(
-        "SELECT t.task_id, el.from_id AS parent_task_id, t.child_seq
+        "SELECT t.task_id, t.child_seq
          FROM tasks t
          JOIN entity_links el
            ON el.to_type='TASK' AND el.to_id=t.task_id
           AND el.from_type='TASK' AND el.edge_kind='parent_of'
-         WHERE t.child_seq IS NOT NULL
-         ORDER BY el.from_id, t.child_seq",
+         WHERE t.child_seq IS NOT NULL",
     )?;
-    let children: Vec<(String, String, i64)> = child_stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let children: Vec<(String, i64)> = child_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    // Multiple passes for transitive chains (parent → child → grandchild).
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (child_id, parent_id, seq) in &children {
-            if let Some(parent_compact) = result.get(parent_id).cloned() {
-                let dot_form = format!("{parent_compact}.{seq}");
-                if result.get(child_id) != Some(&dot_form) {
-                    result.insert(child_id.clone(), dot_form);
-                    changed = true;
-                }
-            }
+    for (child_id, seq) in &children {
+        if let Some(child_compact) = result.get(child_id).cloned() {
+            result.insert(child_id.clone(), format!("{child_compact}.{seq}"));
         }
     }
 
@@ -647,6 +699,94 @@ mod tests {
         assert_eq!(common_prefix_len("", "abc"), 0);
     }
 
+    // ─── alias / task_external_ids fallback tests ──────────────────────────
+    //
+    // When no live task matches an input string, the resolver falls back to
+    // task_external_ids so that legacy / imported external IDs can still resolve.
+
+    /// Helper: insert a task_external_ids row with FK off.
+    fn insert_external_id(conn: &Connection, task_id: &str, source: &str, external_id: &str) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO task_external_ids (task_id, source, external_id, imported_at)
+             VALUES (?1, ?2, ?3, 1000)",
+            rusqlite::params![task_id, source, external_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    }
+
+    /// Resolving an external_id returns the aliased task with match_source=Alias.
+    #[test]
+    fn test_resolve_alias_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+
+        let tid = "ALP-01JTEST00000000000000AA";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Aliased task', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'abc')",
+            [tid],
+        ).unwrap();
+
+        // Write an alias for the task
+        insert_external_id(&conn, tid, "previous", "DLS/my-old-task");
+
+        // Resolving the alias string returns the task with Alias match source
+        let result = resolve_task_id(&conn, "DLS/my-old-task").unwrap();
+        assert_eq!(result.task_id, tid);
+        assert_eq!(result.match_source, MatchSource::Alias);
+        assert_eq!(result.redirected_from, Some("DLS/my-old-task".to_string()));
+    }
+
+    /// When no live task matches, alias lookup finds the task.
+    #[test]
+    fn test_resolve_alias_fallback_when_no_live_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+
+        let tid = "ALP-01JTASKALIAS0000000AA";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Aliased task', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'abc')",
+            [&tid],
+        ).unwrap();
+        insert_external_id(&conn, tid, "previous", "DLS/old-task-id");
+
+        // No live task matches "DLS/old-task-id" — alias fallback finds it
+        let result = resolve_task_id(&conn, "DLS/old-task-id").unwrap();
+        assert_eq!(result.task_id, tid);
+        assert_eq!(result.match_source, MatchSource::Alias);
+    }
+
+    /// A string that matches BOTH a live task and an alias returns the live task (live is preferred).
+    #[test]
+    fn test_resolve_live_preferred_over_alias_for_same_string() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+
+        let live_tid = "ALP-01JLIVE0000000000000AA";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Live task', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'dead')",
+            [&live_tid],
+        ).unwrap();
+
+        // Alias also exists with "dead" as its external_id — but the live path
+        // matches by display_id first, so alias is never consulted
+        insert_external_id(&conn, live_tid, "previous", "dead");
+
+        // The string "dead" is all-lowercase hex so the hash-based display_id
+        // lookup fires and matches the live task before alias fallback is reached.
+        let result = resolve_task_id(&conn, "dead").unwrap();
+        assert_eq!(result.task_id, live_tid);
+        assert_eq!(result.match_source, MatchSource::Live);
+        assert_eq!(result.redirected_from, None);
+    }
+
     // ─── resolve_brain_from_prefix defense-in-depth tests ─────────────────
     //
     // These tests construct duplicate-prefix state by dropping the v54→v55
@@ -742,5 +882,96 @@ mod tests {
         let result =
             resolve_brain_from_prefix(&conn, "01JTEST0000000000000000AA").expect("no error path");
         assert_eq!(result, None);
+    }
+
+    // ─── compact_id cross-brain child tests ─────────────────────────────────
+
+    /// A child task in a different brain from its parent must use its own
+    /// brain prefix in dot notation, not the parent's prefix (brn-6710).
+    #[test]
+    fn test_compact_id_child_uses_own_brain_prefix() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+        ensure_brain_registered(&conn, "brain-bbb", "bravo").unwrap();
+
+        // Parent in brain-aaa with display_id "abc"
+        let parent_id = "ALP-01JTEST000000000000000001";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Parent', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'abc')",
+            [parent_id],
+        ).unwrap();
+
+        // Child in brain-bbb (different brain) with display_id "xyz"
+        let child_id = "BRV-01JTEST000000000000000002";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id, parent_task_id, child_seq)
+             VALUES (?1, 'brain-bbb', 'Child', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'xyz', ?2, 1)",
+            rusqlite::params![child_id, parent_id],
+        ).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![parent_id, child_id],
+        ).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        // Child's compact_id must use brain-bbb's prefix (bravo → "brv"), not brain-aaa's (alpha → "alp")
+        let compact = compact_id(&conn, child_id).unwrap();
+        assert!(
+            compact.starts_with("brv-"),
+            "child in brain-bbb must use brv- prefix, got: {compact}"
+        );
+        assert!(
+            compact.ends_with(".1"),
+            "child dot suffix must be .1, got: {compact}"
+        );
+        assert!(
+            compact.contains("xyz"),
+            "child display_id 'xyz' must appear, got: {compact}"
+        );
+    }
+
+    /// compact_ids batch: children use their own pre-computed display ID.
+    #[test]
+    fn test_compact_ids_child_uses_own_brain_prefix() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+        ensure_brain_registered(&conn, "brain-bbb", "bravo").unwrap();
+
+        let parent_id = "ALP-01JTEST000000000000000001";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Parent', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'abc')",
+            [parent_id],
+        ).unwrap();
+
+        let child_id = "BRV-01JTEST000000000000000002";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id, parent_task_id, child_seq)
+             VALUES (?1, 'brain-bbb', 'Child', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'xyz', ?2, 1)",
+            rusqlite::params![child_id, parent_id],
+        ).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![parent_id, child_id],
+        ).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let compacts = compact_ids(&conn).unwrap();
+        let child_compact = compacts.get(child_id).expect("child must be in compacts");
+        assert!(
+            child_compact.starts_with("brv-"),
+            "batch compact for child in brain-bbb must use brv- prefix, got: {child_compact}"
+        );
+        assert!(
+            child_compact.ends_with(".1"),
+            "child dot suffix must be .1, got: {child_compact}"
+        );
     }
 }

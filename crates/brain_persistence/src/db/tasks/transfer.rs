@@ -135,6 +135,19 @@ pub fn transfer_task_inner(
             crate::utils::now_ts(),
         )?;
 
+        // 8. Record previous brain+ID alias so the task remains findable by its old
+        // brain-prefixed ID after transfer. Compute the alias before moving
+        // from_brain_id/from_display_id into the result struct below.
+        let previous_alias = format!("{}/{}", from_brain_id, from_display_id);
+        writers::add_external_id(
+            conn,
+            task_id,
+            "previous",
+            &previous_alias,
+            None,
+            crate::utils::now_ts(),
+        )?;
+
         Ok(TaskTransferResult {
             task_id: task_id.to_string(),
             from_brain_id,

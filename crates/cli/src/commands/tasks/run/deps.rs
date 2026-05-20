@@ -36,12 +36,14 @@ pub fn dep_add(
         }
         return Ok(());
     }
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let depends_on = &ctx.store.resolve_task_id(depends_on)?;
-    let display_task_id = ctx.store.compact_id_or_raw(task_id);
-    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
+    let result = ctx.store.resolve_task_id(task_id)?;
+    let task_id = result.task_id;
+    let result = ctx.store.resolve_task_id(depends_on)?;
+    let depends_on = result.task_id;
+    let display_task_id = ctx.store.compact_id_or_raw(&task_id);
+    let display_depends_on = ctx.store.compact_id_or_raw(&depends_on);
     let event = TaskEvent::new(
-        task_id,
+        &task_id,
         "cli",
         EventType::DependencyAdded,
         &DependencyPayload {
@@ -94,12 +96,14 @@ pub fn dep_remove(
         }
         return Ok(());
     }
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let depends_on = &ctx.store.resolve_task_id(depends_on)?;
-    let display_task_id = ctx.store.compact_id_or_raw(task_id);
-    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
+    let result = ctx.store.resolve_task_id(task_id)?;
+    let task_id = result.task_id;
+    let result = ctx.store.resolve_task_id(depends_on)?;
+    let depends_on = result.task_id;
+    let display_task_id = ctx.store.compact_id_or_raw(&task_id);
+    let display_depends_on = ctx.store.compact_id_or_raw(&depends_on);
     let event = TaskEvent::new(
-        task_id,
+        &task_id,
         "cli",
         EventType::DependencyRemoved,
         &DependencyPayload {
@@ -133,7 +137,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
     // Resolve all IDs first
     let resolved: Vec<String> = task_ids
         .iter()
-        .map(|id| ctx.store.resolve_task_id(id))
+        .map(|id| ctx.store.resolve_task_id(id).map(|r| r.task_id))
         .collect::<brain_lib::error::Result<Vec<_>>>()?;
 
     let mut succeeded = Vec::new();
@@ -210,7 +214,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
 }
 
 pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result<()> {
-    let source_resolved = ctx.store.resolve_task_id(source)?;
+    let source_resolved = ctx.store.resolve_task_id(source)?.task_id;
     let source_display = ctx.store.compact_id_or_raw(&source_resolved);
 
     let mut succeeded = Vec::new();
@@ -218,7 +222,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
 
     for raw_id in dependents {
         let dep_id = match ctx.store.resolve_task_id(raw_id) {
-            Ok(id) => id,
+            Ok(id) => id.task_id,
             Err(e) => {
                 failed.push((raw_id.clone(), format!("{e}"), false));
                 if !ctx.output.is_json_mode() {
@@ -285,7 +289,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
 }
 
 pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
-    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let resolved = ctx.store.resolve_task_id(task_id)?.task_id;
     let display_resolved = ctx.store.compact_id_or_raw(&resolved);
     let deps = ctx.store.get_deps_for_task(&resolved)?;
 

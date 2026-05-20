@@ -193,7 +193,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
 
     // Resolve parent task ID against the remote brain if provided.
     let parent = match params.parent {
-        Some(ref p) => Some(remote_store.resolve_task_id(p)?),
+        Some(ref p) => Some(remote_store.resolve_task_id(p)?.task_id),
         None => None,
     };
 

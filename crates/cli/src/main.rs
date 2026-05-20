@@ -511,7 +511,16 @@ mod tests {
 
     #[test]
     fn parse_tasks_close() {
-        let cli = Cli::try_parse_from(["brain", "tasks", "close", "t1", "t2"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "brain",
+            "tasks",
+            "close",
+            "--brain",
+            "test-brain",
+            "t1",
+            "t2",
+        ])
+        .unwrap();
         match cli.command {
             Command::Tasks {
                 action: TasksAction::Close { ids, .. },
@@ -525,7 +534,7 @@ mod tests {
 
     #[test]
     fn parse_tasks_close_requires_id() {
-        assert!(Cli::try_parse_from(["brain", "tasks", "close"]).is_err());
+        assert!(Cli::try_parse_from(["brain", "tasks", "close", "--brain", "test-brain"]).is_err());
     }
 
     #[test]
@@ -577,7 +586,7 @@ mod tests {
                 action: TasksAction::Create { brain, title, .. },
                 ..
             } => {
-                assert_eq!(brain, Some("infra".to_string()));
+                assert_eq!(brain, "infra");
                 assert_eq!(title, "Fix CI");
             }
             _ => panic!("expected Tasks Create"),

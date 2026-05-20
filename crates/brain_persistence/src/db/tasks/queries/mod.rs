@@ -10,6 +10,50 @@ pub use labels::*;
 pub use listing::*;
 pub use resolve::*;
 
+/// Source of a task ID resolution match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchSource {
+    /// Matched a live row in the `tasks` table.
+    Live,
+    /// Matched a row in `task_external_ids` (alias/previous-ID lookup).
+    Alias,
+}
+
+/// Result of resolving a task ID string to a concrete task_id.
+///
+/// For backward compatibility, callers that only need the resolved task_id
+/// can use `result.task_id` — the `match_source` field is annotations for
+/// Phase 5 UX wiring.
+#[derive(Debug, Clone)]
+pub struct TaskResolutionResult {
+    /// The resolved task_id (bare ID, suitable for FK use).
+    pub task_id: String,
+    /// Whether this resolved via a live tasks row or an alias row.
+    pub match_source: MatchSource,
+    /// For alias matches: the external_id that was looked up (e.g. `"BRN/abc123"`).
+    pub redirected_from: Option<String>,
+}
+
+impl PartialEq for TaskResolutionResult {
+    /// Compares only `task_id` for backward compatibility with existing call-sites
+    /// that compare resolution results to bare task ID strings.
+    fn eq(&self, other: &Self) -> bool {
+        self.task_id == other.task_id
+    }
+}
+
+impl PartialEq<String> for TaskResolutionResult {
+    fn eq(&self, other: &String) -> bool {
+        &self.task_id == other
+    }
+}
+
+impl PartialEq<&str> for TaskResolutionResult {
+    fn eq(&self, other: &&str) -> bool {
+        &self.task_id == other
+    }
+}
+
 /// A row from the tasks projection table.
 #[derive(Debug, Clone)]
 pub struct TaskRow {
@@ -1542,20 +1586,23 @@ mod tests {
 
         let compact = compact_ids(&conn).unwrap();
 
-        let parent_id = compact["BRN-01PARENT001"].clone();
+        let parent_compact = compact["BRN-01PARENT001"].clone();
         let child1_id = &compact["BRN-01CHILD0001"];
         let child2_id = &compact["BRN-01CHILD0002"];
 
-        // Children must use dot-notation: {parent_compact}.{child_seq}
+        // Children must end with dot-notation: {own_base}.{child_seq}
         assert!(
-            child1_id.starts_with(&format!("{parent_id}.")),
-            "child1 compact ID must start with parent compact ID: parent={parent_id} child={child1_id}"
+            child1_id.ends_with(".1"),
+            "child1 must end with .1 (its child_seq): got {child1_id}"
         );
         assert!(
-            child2_id.starts_with(&format!("{parent_id}.")),
-            "child2 compact ID must start with parent compact ID: parent={parent_id} child={child2_id}"
+            child2_id.ends_with(".2"),
+            "child2 must end with .2 (its child_seq): got {child2_id}"
         );
         // Distinct children must have distinct compact IDs
         assert_ne!(child1_id, child2_id);
+        // Parent and child must have different bases (child uses its own display, not parent's)
+        assert_ne!(parent_compact, *child1_id);
+        assert_ne!(parent_compact, *child2_id);
     }
 }

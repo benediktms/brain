@@ -190,8 +190,9 @@ pub fn label_add(
         };
         return label_add(&remote_ctx, task_id, label, None, false);
     }
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -246,8 +247,9 @@ pub fn label_remove(
         };
         return label_remove(&remote_ctx, task_id, label, None, false);
     }
-    let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx.store.compact_id_or_raw(task_id);
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let task_id = resolved.task_id;
+    let display_id = ctx.store.compact_id_or_raw(&task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -287,7 +289,7 @@ fn batch_label_op(
         .map(|raw_id| {
             let resolved = ctx.store.resolve_task_id(raw_id)?;
             Ok(TaskEvent::new(
-                &resolved,
+                &resolved.task_id,
                 "cli",
                 event_type.clone(),
                 &LabelPayload {

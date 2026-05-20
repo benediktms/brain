@@ -245,7 +245,7 @@ impl BrainStoresDispatcher {
         // "not found" (Option::None) rather than a Protocol error — the
         // wire-shape contract for TasksShow is "None when absent".
         let resolved = match self.stores.tasks.resolve_task_id(&id) {
-            Ok(r) => r,
+            Ok(r) => r.task_id,
             Err(_) => return Ok(Response::TasksShow { task: None }),
         };
         let task = self
@@ -315,9 +315,14 @@ impl BrainStoresDispatcher {
 
         // Resolve parent if provided.
         let parent = match params.parent.as_deref() {
-            Some(p) => Some(tasks.resolve_task_id(p).map_err(|e| RpcError::Protocol {
-                message: format!("resolve parent task id: {e}"),
-            })?),
+            Some(p) => Some(
+                tasks
+                    .resolve_task_id(p)
+                    .map_err(|e| RpcError::Protocol {
+                        message: format!("resolve parent task id: {e}"),
+                    })?
+                    .task_id,
+            ),
             None => None,
         };
 
@@ -374,7 +379,8 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&params.id)
             .map_err(|_| RpcError::NotFound {
                 id: params.id.clone(),
-            })?;
+            })?
+            .task_id;
 
         let event = TaskEvent::from_payload(
             &resolved,
@@ -431,7 +437,8 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&params.id)
             .map_err(|_| RpcError::NotFound {
                 id: params.id.clone(),
-            })?;
+            })?
+            .task_id;
 
         let event =
             TaskEvent::from_payload(&resolved, "daemon", StatusChangedPayload { new_status });
@@ -488,13 +495,14 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
                 id: task_id.clone(),
-            })?;
-        let dep_resolved =
-            tasks
-                .resolve_task_id(&depends_on_task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: depends_on_task_id.clone(),
-                })?;
+            })?
+            .task_id;
+        let dep_resolved = tasks
+            .resolve_task_id(&depends_on_task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: depends_on_task_id.clone(),
+            })?
+            .task_id;
 
         let event = TaskEvent::new(
             &task_resolved,
@@ -525,13 +533,14 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
                 id: task_id.clone(),
-            })?;
-        let dep_resolved =
-            tasks
-                .resolve_task_id(&depends_on_task_id)
-                .map_err(|_| RpcError::NotFound {
-                    id: depends_on_task_id.clone(),
-                })?;
+            })?
+            .task_id;
+        let dep_resolved = tasks
+            .resolve_task_id(&depends_on_task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: depends_on_task_id.clone(),
+            })?
+            .task_id;
 
         let event = TaskEvent::new(
             &task_resolved,
@@ -562,7 +571,8 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
                 id: task_id.clone(),
-            })?;
+            })?
+            .task_id;
 
         let event = TaskEvent::new(
             &resolved,
@@ -591,7 +601,8 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&task_id)
             .map_err(|_| RpcError::NotFound {
                 id: task_id.clone(),
-            })?;
+            })?
+            .task_id;
 
         let event = TaskEvent::new(
             &resolved,
@@ -615,7 +626,8 @@ impl BrainStoresDispatcher {
             .resolve_task_id(&params.task_id)
             .map_err(|_| RpcError::NotFound {
                 id: params.task_id.clone(),
-            })?;
+            })?
+            .task_id;
 
         let (target_brain_id, target_brain_name) = self
             .stores
@@ -2510,6 +2522,7 @@ impl BrainStoresDispatcher {
                         .map_err(|e| RpcError::NotFound {
                             id: format!("task_id '{id}': {e}"),
                         })?
+                        .task_id
                 }
             }
             None => {
@@ -2542,13 +2555,14 @@ impl BrainStoresDispatcher {
             .filter(|s| !s.is_empty())
         {
             let dep_owned = brain_lib::uri::resolve_id(dep_id);
-            let resolved =
-                self.stores
-                    .tasks
-                    .resolve_task_id(&dep_owned)
-                    .map_err(|e| RpcError::NotFound {
-                        id: format!("depends_on_task_id '{dep_owned}': {e}"),
-                    })?;
+            let resolved = self
+                .stores
+                .tasks
+                .resolve_task_id(&dep_owned)
+                .map_err(|e| RpcError::NotFound {
+                    id: format!("depends_on_task_id '{dep_owned}': {e}"),
+                })?
+                .task_id;
             payload["depends_on_task_id"] = serde_json::json!(resolved);
         }
         if let Some(parent_id) = payload
@@ -2563,7 +2577,8 @@ impl BrainStoresDispatcher {
                 .resolve_task_id(&parent_owned)
                 .map_err(|e| RpcError::NotFound {
                     id: format!("parent_task_id '{parent_owned}': {e}"),
-                })?;
+                })?
+                .task_id;
             payload["parent_task_id"] = serde_json::json!(resolved);
         }
 
@@ -3888,7 +3903,7 @@ fn label_add_remove_response(
 
     for raw_id in task_ids {
         let resolved_input = brain_lib::uri::resolve_id(raw_id);
-        match store.resolve_task_id(&resolved_input) {
+        match store.resolve_task_id(&resolved_input).map(|r| r.task_id) {
             Ok(resolved) => events.push(TaskEvent::new(
                 &resolved,
                 "mcp",
@@ -4142,7 +4157,7 @@ fn deps_pairs_response(
     for (raw_task, raw_depends_on) in pairs {
         let task_input = brain_lib::uri::resolve_id(raw_task);
         let task_id = match store.resolve_task_id(&task_input) {
-            Ok(id) => id,
+            Ok(id) => id.task_id,
             Err(e) => {
                 failed.push(serde_json::json!({
                     "task_id": raw_task,
@@ -4154,7 +4169,7 @@ fn deps_pairs_response(
         };
         let depends_input = brain_lib::uri::resolve_id(raw_depends_on);
         let depends_on = match store.resolve_task_id(&depends_input) {
-            Ok(id) => id,
+            Ok(id) => id.task_id,
             Err(e) => {
                 failed.push(serde_json::json!({
                     "task_id": raw_task,
@@ -4212,7 +4227,7 @@ fn deps_chain_response(
     for raw_id in task_ids {
         let input = brain_lib::uri::resolve_id(raw_id);
         match store.resolve_task_id(&input) {
-            Ok(id) => resolved.push(id),
+            Ok(id) => resolved.push(id.task_id),
             Err(e) => failed.push(serde_json::json!({
                 "task_id": raw_id,
                 "error": format!("{e}"),
@@ -4279,17 +4294,20 @@ fn deps_fan_response(
     }
 
     let source_input = brain_lib::uri::resolve_id(source);
-    let source_resolved = store.resolve_task_id(&source_input).map_err(|e| {
-        if e.to_string().contains("ambiguous") {
-            RpcError::Protocol {
-                message: format!("invalid/missing source_task_id: {e}"),
+    let source_resolved = store
+        .resolve_task_id(&source_input)
+        .map_err(|e| {
+            if e.to_string().contains("ambiguous") {
+                RpcError::Protocol {
+                    message: format!("invalid/missing source_task_id: {e}"),
+                }
+            } else {
+                RpcError::NotFound {
+                    id: format!("source_task_id not found: {e}"),
+                }
             }
-        } else {
-            RpcError::NotFound {
-                id: format!("source_task_id not found: {e}"),
-            }
-        }
-    })?;
+        })?
+        .task_id;
     let source_compact = store.compact_id_or_raw(&source_resolved);
 
     let mut succeeded: Vec<serde_json::Value> = Vec::new();
@@ -4298,7 +4316,7 @@ fn deps_fan_response(
     for raw_id in dependents {
         let dep_input = brain_lib::uri::resolve_id(raw_id);
         let dep_id = match store.resolve_task_id(&dep_input) {
-            Ok(id) => id,
+            Ok(id) => id.task_id,
             Err(e) => {
                 failed.push(serde_json::json!({
                     "task_id": raw_id,
@@ -4347,17 +4365,20 @@ fn deps_clear_response(
         })?;
 
     let input = brain_lib::uri::resolve_id(task_id);
-    let resolved = store.resolve_task_id(&input).map_err(|e| {
-        if e.to_string().contains("ambiguous") {
-            RpcError::Protocol {
-                message: format!("invalid/missing task_id: {e}"),
+    let resolved = store
+        .resolve_task_id(&input)
+        .map_err(|e| {
+            if e.to_string().contains("ambiguous") {
+                RpcError::Protocol {
+                    message: format!("invalid/missing task_id: {e}"),
+                }
+            } else {
+                RpcError::NotFound {
+                    id: format!("task_id not found: {e}"),
+                }
             }
-        } else {
-            RpcError::NotFound {
-                id: format!("task_id not found: {e}"),
-            }
-        }
-    })?;
+        })?
+        .task_id;
 
     let deps = store
         .get_deps_for_task(&resolved)

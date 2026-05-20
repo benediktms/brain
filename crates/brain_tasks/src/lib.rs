@@ -19,6 +19,7 @@ use brain_persistence::sql::SqlResultExt;
 
 use events::TaskEvent;
 
+pub use brain_persistence::db::tasks::queries::TaskResolutionResult;
 pub use brain_persistence::db::tasks::transfer::TaskTransferResult;
 
 /// The task store: SQLite is the sole source of truth.
@@ -400,7 +401,7 @@ impl TaskStore {
     /// If the input has a prefix (e.g. "ckt-ebd") that maps to a different
     /// brain, resolution automatically switches to that brain's scope. This
     /// ensures cross-brain task references work from any store context.
-    pub fn resolve_task_id(&self, input: &str) -> Result<String> {
+    pub fn resolve_task_id(&self, input: &str) -> Result<TaskResolutionResult> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {

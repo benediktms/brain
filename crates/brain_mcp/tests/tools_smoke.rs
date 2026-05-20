@@ -333,8 +333,6 @@ async fn test_task_create_rejects_brain_param() {
     );
 
     let text = &result.content[0].text;
-    // The error message references either "cross-brain" or "tasks.apply_event"
-    // — both indicate the correct rejection path.
     assert!(
         text.contains("cross-brain") || text.contains("tasks.apply_event"),
         "error should reference cross-brain or tasks.apply_event: got {text:?}"

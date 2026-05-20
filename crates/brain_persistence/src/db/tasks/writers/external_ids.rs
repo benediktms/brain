@@ -1,8 +1,7 @@
 //! Writers for the `task_external_ids` table.
 
-use rusqlite::{Connection, OptionalExtension};
-
 use crate::sql::SqlResult;
+use rusqlite::{Connection, OptionalExtension};
 
 /// INSERT OR IGNORE into task_external_ids with default `blocking=0`.
 pub fn add_external_id(
