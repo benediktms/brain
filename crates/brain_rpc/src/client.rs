@@ -1107,10 +1107,8 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// # Errors
     ///
-    /// - [`RpcError::InvalidParams`] — the provider name is not in
-    ///   [`VALID_PROVIDERS`](crate::providers::VALID_PROVIDERS).
-    /// - [`RpcError::Protocol`] — the daemon replied with anything other
-    ///   than [`Response::ProviderSetDone`].
+    /// - [`RpcError::Protocol`] — the provider name is not a valid provider name,
+    ///   or the daemon replied with anything other than [`Response::ProviderSetDone`].
     pub fn provider_set(&mut self, name: &str, api_key: &str) -> Result<String, RpcError> {
         let params = ProviderSetParams {
             name: name.to_owned(),
@@ -1817,6 +1815,124 @@ mod tests {
                 );
             }
             Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── jobs_retry ────────────────────────────────────────────────────────
+
+    #[test]
+    fn jobs_retry_returns_job_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::JobsRetry { params } => {
+                assert_eq!(params.job_id, "job-123");
+                Ok(Response::JobsRetrySuccess {
+                    job_id: "job-123".into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let job_id = client.jobs_retry("job-123").expect("jobs_retry");
+        assert_eq!(job_id, "job-123");
+    }
+
+    #[test]
+    fn jobs_retry_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.jobs_retry("job-123") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("JobsRetrySuccess"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── jobs_gc ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn jobs_gc_returns_deleted_count() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::JobsGc { params } => {
+                assert_eq!(params.older_than_days, 7);
+                Ok(Response::JobsGcDone { deleted: 13 })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let deleted = client.jobs_gc(7).expect("jobs_gc");
+        assert_eq!(deleted, 13);
+    }
+
+    #[test]
+    fn jobs_gc_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.jobs_gc(7) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("JobsGcDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── provider_set ─────────────────────────────────────────────────────
+
+    #[test]
+    fn provider_set_returns_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::ProviderSet { params } => {
+                assert_eq!(params.name, "openai");
+                assert_eq!(params.api_key, "sk-test");
+                Ok(Response::ProviderSetDone {
+                    id: "prov_abc".into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let id = client
+            .provider_set("openai", "sk-test")
+            .expect("provider_set");
+        assert_eq!(id, "prov_abc");
+    }
+
+    #[test]
+    fn provider_set_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.provider_set("openai", "sk-test") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("ProviderSetDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // ── provider_remove ──────────────────────────────────────────────────
+
+    #[test]
+    fn provider_remove_returns_unit() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::ProviderRemove { params } => {
+                assert_eq!(params.target, "openai");
+                Ok(Response::ProviderRemoveDone)
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        client.provider_remove("openai").expect("provider_remove");
+    }
+
+    #[test]
+    fn provider_remove_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.provider_remove("openai") {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("ProviderRemoveDone"), "got: {message}");
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
         }
     }
 

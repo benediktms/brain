@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A client-originated message sent over the wire.
 ///
@@ -1851,14 +1851,12 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_four() {
-        // Bumped 3 → 4 when Request::RecordsSearch +
-        // Request::RecordsFetchContent (and their Response twins) were
-        // added so the daemon answers records.search +
-        // records.fetch_content MCP tools directly. The handshake
-        // check rejects rolling restarts that pair a pre-bump client
-        // with a post-bump daemon.
-        assert_eq!(PROTOCOL_VERSION, 4);
+    fn protocol_version_is_five() {
+        // Bumped 4 → 5 when Request::JobsRetry, JobsGc, ProviderSet,
+        // ProviderRemove (and their Response twins) were added so the
+        // daemon answers brain jobs retry/gc and brain config provider
+        // set/remove CLI commands directly.
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     #[test]
@@ -3806,6 +3804,36 @@ mod tests {
             },
         };
         assert_eq!(roundtrip(&req), req);
+    }
+
+    // ── jobs retry / gc + provider wire-shape tests ─────────────────
+
+    #[test]
+    fn response_jobs_retry_success_roundtrips() {
+        let resp = Response::JobsRetrySuccess {
+            job_id: "job_abc123".into(),
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_jobs_gc_done_roundtrips() {
+        let resp = Response::JobsGcDone { deleted: 42 };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_provider_set_done_roundtrips() {
+        let resp = Response::ProviderSetDone {
+            id: "prov_xyz".into(),
+        };
+        assert_eq!(roundtrip(&resp), resp);
+    }
+
+    #[test]
+    fn response_provider_remove_done_roundtrips() {
+        let resp = Response::ProviderRemoveDone;
+        assert_eq!(roundtrip(&resp), resp);
     }
 
     // ── records.search + records.fetch_content wire-shape tests ─────────

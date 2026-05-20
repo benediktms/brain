@@ -3161,7 +3161,7 @@ impl BrainStoresDispatcher {
 
         // Validate provider name.
         if !VALID_PROVIDERS.contains(&params.name.as_str()) {
-            return Err(RpcError::Unknown {
+            return Err(RpcError::Protocol {
                 message: format!(
                     "unknown provider '{}'; valid providers are: {}",
                     params.name,
@@ -3190,13 +3190,13 @@ impl BrainStoresDispatcher {
             // Idempotent: already set. Still return the ID.
             let existing = self
                 .stores
-                .get_provider_by_name(&params.name)
+                .get_provider_by_name_and_hash(&params.name, &key_hash)
                 .map_err(|e| RpcError::Unknown {
-                    message: format!("get_provider_by_name failed: {e}"),
+                    message: format!("get_provider_by_name_and_hash failed: {e}"),
                 })?
                 .ok_or_else(|| RpcError::Unknown {
                     message: format!(
-                        "provider '{}' exists but get_provider_by_name returned None",
+                        "provider '{}' exists but get_provider_by_name_and_hash returned None",
                         params.name
                     ),
                 })?;
