@@ -2714,6 +2714,11 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_deps_batch(&self, params: TasksDepsBatchParams) -> Result<Response, RpcError> {
+        if self.stores.brain_id.is_empty() {
+            return Err(RpcError::Protocol {
+                message: "cannot batch-depend: daemon is not scoped to a brain".into(),
+            });
+        }
         // Mirrors `brain_lib::mcp::tools::task_deps_batch::{Params, DepPair}`.
         // Action union: add / remove / chain / fan / clear.
         #[derive(serde::Deserialize)]
@@ -2814,6 +2819,12 @@ impl BrainStoresDispatcher {
             serde_json::from_value(params.params_json).map_err(|e| RpcError::Protocol {
                 message: format!("Invalid parameters: {e}"),
             })?;
+
+        if self.stores.brain_id.is_empty() && parsed.brain.is_none() {
+            return Err(RpcError::Protocol {
+                message: "cannot batch-label: daemon is not scoped to a brain".into(),
+            });
+        }
 
         // Resolve target TaskStore. With `brain` set we open a remote
         // rescoped store; otherwise we use the daemon's local one. The
