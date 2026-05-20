@@ -76,9 +76,11 @@ impl Transport for UnixSocketTransport {
         // Both use adjacent tag field names (6 bytes: `{"kind` vs `{"type`), so a
         // single byte prefix check is enough to dispatch without a full parse.
         if response_bytes.len() >= 6 && response_bytes[0..6] == *b"{\"kind" {
-            return serde_json::from_slice(&response_bytes).map_err(|e| RpcError::Protocol {
-                message: format!("deserialize error: {e}"),
-            });
+            let rpc_err: RpcError =
+                serde_json::from_slice(&response_bytes).map_err(|e| RpcError::Protocol {
+                    message: format!("deserialize error: {e}"),
+                })?;
+            return Err(rpc_err);
         }
 
         serde_json::from_slice(&response_bytes).map_err(|e| RpcError::Protocol {
