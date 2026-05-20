@@ -29,7 +29,8 @@ use tempfile::TempDir;
 /// so storage-backed tool calls (tasks.list, memory.write_episode, etc.)
 /// actually resolve.
 fn spawn_stores_daemon() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
-    let (stores_tmp, stores) = BrainStores::in_memory().expect("BrainStores::in_memory");
+    let (stores_tmp, stores) = BrainStores::in_memory_with_brain("test-brain", "test-brain", "TES")
+        .expect("BrainStores::in_memory_with_brain");
     let sock_tmp = TempDir::new().expect("tempdir for socket");
     let sock_path = sock_tmp.path().join("brain.sock");
     let config = DaemonConfig::new(&sock_path);
